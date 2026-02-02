@@ -26,7 +26,7 @@ Our nodes act as a bridge: ComfyUI handles the heavy lifting of model management
 2. **Install ComfyUI-Gen2**:
    ```bash
    cd ComfyUI/custom_nodes
-   git clone https://github.com/YOUR_USERNAME/ComfyUI-gen2.git
+   git clone https://github.com/petmycat/ComfyUI-gen2.git
    ```
 
 3. **Tokenizer** - Download from [Qwen-Image-2512 on HuggingFace](https://huggingface.co/alibaba-pai/Qwen-Image-2512):
