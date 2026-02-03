@@ -70,5 +70,5 @@ Supports multiple precision modes:
 
 ## License
 
-This project follows the licenses of its dependencies (VideoX-Fun, ComfyUI).
+This project is licensed under the Apache License 2.0. It also follows the licensing requirements of its dependencies (VideoX-Fun, ComfyUI).
 
