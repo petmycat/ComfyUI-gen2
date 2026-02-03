@@ -28,7 +28,7 @@ Documentation = "https://github.com/petmycat/ComfyUI-gen2/wiki"
 "Bug Tracker" = "https://github.com/petmycat/ComfyUI-gen2/issues"
 
 [tool.comfy]
-PublisherId = ""
+PublisherId = "petmycat"
 DisplayName = "ComfyUI-gen2"
 Icon = ""
 includes = [] 
