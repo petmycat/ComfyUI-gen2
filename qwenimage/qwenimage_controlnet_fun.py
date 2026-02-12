@@ -2985,25 +2985,8 @@ class Gen2_QwenImageControlSampler:
         else:
             active_backend = "SDPA"
         
-        print(f"[Gen2] Sampling: {width}x{height}, steps={steps}, cfg_input={cfg}, true_cfg_scale={true_cfg_scale}, shift={shift}, sampler={sampler}")
-        print(f"[Gen2] Precision: model_storage={model_storage_dtype}, compute={compute_dtype}, vae={vae_storage_dtype}, control_ctx={control_context.dtype}")
-        print(f"[Gen2] Attention backend: {active_backend}")
-        print(f"[Gen2] Control scale: {control_context_scale}")
-        print(f"[Gen2] Prompt embeds: pos={prompt_embeds.shape} (tokens={pos_txt_seq_len}), neg={negative_prompt_embeds.shape} (tokens={neg_txt_seq_len})")
-        # Diagnostic: compare embedding statistics with VideoX
-        print(f"[Gen2 Diag] pos_embeds: mean={prompt_embeds.mean().item():.6f}, std={prompt_embeds.std().item():.6f}")
-        print(f"[Gen2 Diag] neg_embeds: mean={negative_prompt_embeds.mean().item():.6f}, std={negative_prompt_embeds.std().item():.6f}")
-        
-        # Check prompt embeddings for NaN/Inf
-        if torch.isnan(prompt_embeds).any() or torch.isinf(prompt_embeds).any():
-            print("[Gen2 WARNING] NaN/Inf in positive prompt embeddings!")
-        if negative_prompt_embeds is not None:
-            if torch.isnan(negative_prompt_embeds).any() or torch.isinf(negative_prompt_embeds).any():
-                print("[Gen2 WARNING] NaN/Inf in negative prompt embeddings!")
-        
-        # Check control context for extreme values
-        ctrl_min, ctrl_max = control_context.min().item(), control_context.max().item()
-        print(f"[Gen2] Control context range: [{ctrl_min:.4f}, {ctrl_max:.4f}]")
+        # Minimal startup info (no .item() calls for speed)
+        print(f"[Gen2] Sampling: {width}x{height}, steps={steps}, cfg={cfg}, sampler={sampler}, backend={active_backend}")
         
         # =================================================================
         # 2. Prepare latents (random noise)
@@ -3017,10 +3000,6 @@ class Gen2_QwenImageControlSampler:
             generator=generator, device=device, dtype=compute_dtype
         )
         latents = pack_latents_v2(latents, batch_size, num_channels_latents, latent_height, latent_width)
-        
-        # Check initial latents
-        lat_min, lat_max = latents.min().item(), latents.max().item()
-        print(f"[Gen2] Initial latents range: [{lat_min:.4f}, {lat_max:.4f}]")
         
         # =================================================================
         # 3. Prepare img_shapes for RoPE
@@ -3053,40 +3032,43 @@ class Gen2_QwenImageControlSampler:
         )
         
         # =================================================================
-        # 6. Denoising loop (VideoX exact copy)
+        # 6. Denoising loop (VideoX exact copy) - Optimized
         # =================================================================
         pbar = comfy.utils.ProgressBar(num_inference_steps)
         
         scheduler.set_begin_index(0)
         
+        # Pre-allocate CFG inputs outside the loop (optimization)
+        if do_true_cfg:
+            # Pre-build lists that don't change between steps
+            prompt_embeds_mask_input = [
+                m for m in negative_prompt_embeds_mask
+            ] + [m for m in prompt_embeds_mask] if prompt_embeds_mask.dim() > 1 else [
+                negative_prompt_embeds_mask, prompt_embeds_mask
+            ]
+            prompt_embeds_input = [
+                e for e in negative_prompt_embeds
+            ] + [e for e in prompt_embeds] if prompt_embeds.dim() > 2 else [
+                negative_prompt_embeds, prompt_embeds
+            ]
+            img_shapes_input = img_shapes * 2
+            txt_seq_lens_input = (negative_txt_seq_lens or txt_seq_lens) + txt_seq_lens
+            control_context_doubled = torch.cat([control_context] * 2)
+        else:
+            prompt_embeds_mask_input = prompt_embeds_mask
+            prompt_embeds_input = prompt_embeds
+            img_shapes_input = img_shapes
+            txt_seq_lens_input = txt_seq_lens
+            control_context_doubled = control_context
+        
         for i, t in enumerate(timesteps):
             if do_true_cfg:
-                # Double batch for CFG
+                # Double batch for CFG (only latents change per step)
                 latent_model_input = torch.cat([latents] * 2)
-                
-                # Combine negative and positive embeddings
-                # VideoX passes these as lists
-                prompt_embeds_mask_input = [
-                    m for m in negative_prompt_embeds_mask
-                ] + [m for m in prompt_embeds_mask] if prompt_embeds_mask.dim() > 1 else [
-                    negative_prompt_embeds_mask, prompt_embeds_mask
-                ]
-                prompt_embeds_input = [
-                    e for e in negative_prompt_embeds
-                ] + [e for e in prompt_embeds] if prompt_embeds.dim() > 2 else [
-                    negative_prompt_embeds, prompt_embeds
-                ]
-                
-                img_shapes_input = img_shapes * 2
-                txt_seq_lens_input = (negative_txt_seq_lens or txt_seq_lens) + txt_seq_lens
-                control_context_input = torch.cat([control_context] * 2)
+                control_context_input = control_context_doubled
             else:
                 latent_model_input = latents
-                prompt_embeds_mask_input = prompt_embeds_mask
-                prompt_embeds_input = prompt_embeds
-                img_shapes_input = img_shapes
-                txt_seq_lens_input = txt_seq_lens
-                control_context_input = control_context
+                control_context_input = control_context_doubled
             
             # Scale model input if scheduler requires
             if hasattr(scheduler, "scale_model_input"):
@@ -3116,39 +3098,21 @@ class Gen2_QwenImageControlSampler:
                     return_dict=False,
                 )
             
-            # Check transformer output for NaN/Inf
-            if torch.isnan(noise_pred).any() or torch.isinf(noise_pred).any():
-                print(f"[Gen2 WARNING] NaN/Inf in transformer output at step {i}, timestep={t.item():.4f}")
-            
             # Apply CFG (VideoX's true_cfg with norm rescaling - EXACT MATCH)
             if do_true_cfg:
                 neg_noise_pred, pos_noise_pred = noise_pred.chunk(2)
                 comb_pred = neg_noise_pred + true_cfg_scale * (pos_noise_pred - neg_noise_pred)
                 
                 # Norm rescaling - VideoX does NOT use epsilon here
-                # cond_norm / noise_norm exactly as VideoX does
                 cond_norm = torch.norm(pos_noise_pred, dim=-1, keepdim=True)
                 noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
-                
-                # Log CFG stats at first, middle, and last step
-                if i == 0 or i == num_inference_steps // 2 or i == num_inference_steps - 1:
-                    ratio = (cond_norm / noise_norm).mean().item()
-                    print(f"[Gen2 CFG] step={i}: cond_norm_mean={cond_norm.mean().item():.4f}, noise_norm_mean={noise_norm.mean().item():.4f}, ratio={ratio:.4f}")
                 
                 # EXACT VideoX: comb_pred * (cond_norm / noise_norm)
                 noise_pred = comb_pred * (cond_norm / noise_norm)
             
-            # Check for NaN/Inf (debugging numerical instability)
-            if torch.isnan(noise_pred).any() or torch.isinf(noise_pred).any():
-                print(f"[Gen2 WARNING] NaN/Inf detected in noise_pred at step {i}")
-            
             # Scheduler step
             latents_dtype = latents.dtype
             latents = scheduler.step(noise_pred, t, latents, return_dict=False)[0]
-            
-            # Check latents for NaN/Inf
-            if torch.isnan(latents).any() or torch.isinf(latents).any():
-                print(f"[Gen2 WARNING] NaN/Inf detected in latents at step {i}")
             
             if latents.dtype != latents_dtype:
                 latents = latents.to(latents_dtype)
@@ -3158,13 +3122,6 @@ class Gen2_QwenImageControlSampler:
         # =================================================================
         # 7. Decode latents to image
         # =================================================================
-        # Check final latents
-        final_lat_min, final_lat_max = latents.min().item(), latents.max().item()
-        final_lat_std = latents.std().item()
-        print(f"[Gen2] Final latents range: [{final_lat_min:.4f}, {final_lat_max:.4f}], std={final_lat_std:.4f}")
-        if torch.isnan(latents).any() or torch.isinf(latents).any():
-            print("[Gen2 ERROR] NaN/Inf in final latents! Image will be corrupted.")
-        
         # Calculate actual image dimensions from latent dimensions
         # latent_height/width are the 5D latent dims, image = latent * vae_scale_factor
         actual_height = latent_height * vae_scale_factor
