@@ -1,7 +1,7 @@
 [project]
 name = "gen2"
 description = "Custom ComfyUI nodes for QwenImage ControlNet achieving 100% output compatibility with VideoX-Fun's diffusers pipeline while leveraging ComfyUI's efficient model loading system."
-version = "2.1.0"
+version = "2.1.1"
 license = {file = "LICENSE"} 
 # classifiers = [
 #     # For OS-independent nodes (works on all operating systems)
