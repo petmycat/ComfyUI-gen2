@@ -61,6 +61,7 @@ Example workflow and reference images are located in:
 |------|-------------|
 | **Gen2 DWpose with Threshold** | DWpose detector with configurable confidence thresholds for body/hand/face keypoints |
 | **Gen2 StringReplace** | Replace all occurrences of a search string with a replacement string (case-sensitive) |
+| **Gen2 Checkerboard** | Generate a checkerboard pattern image (1px black & white squares) at specified width × height |
 
 ## Dtype Support
 
