@@ -3,7 +3,7 @@ import numpy as np
 
 
 class Gen2_Checkerboard:
-    """Generate a checkerboard pattern image with 1px black and white squares."""
+    """Generate a checkerboard pattern image with configurable block size."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -11,6 +11,7 @@ class Gen2_Checkerboard:
             "required": {
                 "width": ("INT", {"default": 512, "min": 1, "max": 8192, "step": 1}),
                 "height": ("INT", {"default": 512, "min": 1, "max": 8192, "step": 1}),
+                "block_size": ("INT", {"default": 64, "min": 1, "max": 4096, "step": 1}),
             }
         }
 
@@ -19,11 +20,11 @@ class Gen2_Checkerboard:
     FUNCTION = "generate"
     CATEGORY = "Gen2/Utils"
 
-    def generate(self, width: int, height: int) -> tuple:
-        # Create checkerboard: pixel (x, y) is white if (x+y) is even, black if odd
+    def generate(self, width: int, height: int, block_size: int) -> tuple:
+        # Create checkerboard: each block is block_size x block_size pixels
         rows = np.arange(height)
         cols = np.arange(width)
-        grid = (cols[None, :] + rows[:, None]) % 2  # shape: (H, W), values 0 or 1
+        grid = (cols[None, :] // block_size + rows[:, None] // block_size) % 2  # shape: (H, W), values 0 or 1
         # Expand to 3-channel RGB and convert to float32 [0, 1]
         checkerboard = np.stack([grid, grid, grid], axis=-1).astype(np.float32)
         # ComfyUI IMAGE format: (B, H, W, C) float32
