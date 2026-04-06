@@ -60,6 +60,8 @@ Example workflow and reference images are located in:
 | Node | Description |
 |------|-------------|
 | **Gen2 DWpose with Threshold** | DWpose detector with configurable confidence thresholds for body/hand/face keypoints |
+| **Gen2 StringReplace** | Replace all occurrences of a search string with a replacement string (case-sensitive) |
+| **Gen2 Checkerboard** | Generate a checkerboard pattern image (1px black & white squares) at specified width × height |
 
 ## Dtype Support
 
@@ -67,6 +69,14 @@ Supports multiple precision modes:
 - **bf16/fp16** - Full precision models
 - **fp8** - Quantized models (automatic compute dtype detection)
 - **GGUF** - Quantized models via ComfyUI-GGUF
+
+## TODO
+
+- [ ] Add node parameter explanations for better user support (document what each parameter does in every node)
+- [ ] Integrate custom Load VAE node into ComfyUI system and add latent image input to sampler node
+- [ ] Decouple ControlNet node and sampler node
+- [ ] Add start and end step parameters to sampler node
+- [x] Reorganize code for better maintenance — split into `qwenimage/` (core + nodes) and `misc_nodes/` (pose, string utils)
 
 ## License
 
