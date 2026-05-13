@@ -76,6 +76,8 @@ A pair of nodes for tile-based image workflows (e.g. high-res inpaint, tiled ups
 | **Gen2 Tile Splitter** | Auto-grid an image into uniform tiles with an overlap halo. Inputs: `image`, `tile_size`, `overlap_pct`. Outputs: `tile_layout` (`GEN2_TILE_LAYOUT`) and `tiles_image_list` (list of tile images, row-major). |
 | **Gen2 Tile Masks** | Build per-tile masks selecting each tile's owned base region. Inputs: `tile_layout`, `mask_blend_pixels`. Output: `masks_list` (list of `MASK`, same order as the splitter's tiles). Each mask has value `1.0` over the base region and `0.0` over the halo, with optional Gaussian feathering. |
 | **Gen2 Tile Merger** | Recombine processed tiles back into a single image. Inputs: `tile_layout`, `blend_mode`, `blend_strength`, `seam_mode`, `histogram_matching`, optional `processed_tiles_image_list`, optional `masks_list`. Output: `merged_image`. |
+| **Gen2 Seam Fix** | Build seam-targeted tiles + strip masks from a first-pass merged image, for a second-pass denoise that smooths the seams between regenerated bases. Inputs: `original_image`, `merged_image`, `tile_layout`, `seam_strip_width`, `mask_blend_pixels`. Outputs: `seam_layout` (`GEN2_SEAM_LAYOUT`), `seam_tiles`, `seam_tiles_masks`. |
+| **Gen2 Seam Merger** | Composite regenerated seam tiles back onto the first-pass merged image. Inputs: `merged_image`, `seam_layout`, `blend_mode`, `blend_strength`, `histogram_matching`, optional `processed_seam_tiles_list`, optional `seam_tiles_masks_list`. Output: `final_image`. |
 
 #### Splitter algorithm
 
@@ -119,6 +121,71 @@ A dict carrying everything downstream nodes need to reconstruct the partition:
 
 `histogram_matching = True` applies a Reinhard mean/std color transfer to each tile (except the first column) using the left neighbor's `2·overlap_px` left-edge band as the reference. Useful when each tile is sampled independently and tile-to-tile color drift is visible.
 
+#### Two-pass seam-fix workflow
+
+Even with the merger's normalized weighted average, regenerated tile bases can disagree at the seams (each tile was sampled independently, so the same image-space pixel can look different inside tile A's halo vs tile B's base). The merge smoothly blends them, but the blend itself can show ghosting or texture mismatch at the seam line. `Gen2_SeamFix` + `Gen2_SeamMerger` add a second-pass denoise targeted at exactly those seam strips:
+
+```
+Pass 1 (existing):
+    Splitter → TileMasks → sampler → TileMerger (none)  → merged_image
+                                                            │
+Pass 2 (new):                                              │
+    original_image ┐                                       │
+    merged_image ──┼→ SeamFix → sampler → SeamMerger ──→ final_image
+    tile_layout ───┘            (seam tiles)   ↑
+                                merged_image ──┘
+```
+
+`Gen2_SeamFix` carves the union of seam neighborhoods into:
+
+- One **intersection tile** per (vertical seam × horizontal seam) crossing — a square of side `seam_strip_width + 2·overlap_px` centered on the crossing.
+- One **arm tile** per seam segment between consecutive intersections (or image edge ↔ first/last intersection) — a long rectangle of the same thickness, running along the seam axis.
+
+For a 2×2 grid (2048×2048, `tile_size=1024`, `overlap_pct=0.25`, `seam_strip_width=128`):
+- 1 intersection at image `[704:1344, 704:1344]` (640×640)
+- 4 arms: top `[0:704, 704:1344]`, bottom `[1344:2048, 704:1344]`, left `[704:1344, 0:704]`, right `[704:1344, 1344:2048]`
+
+All 5 tiles tile the cross-shaped seam neighborhood with **no overlap**, so the seam merger doesn't need to renormalize across overlapping tiles.
+
+Each seam tile's image content = the merged image cropped at the tile rect, with the strip region **overwritten by the original image's content** at the same image-space location. That gives the sampler a clean inpaint init at the strip and the regenerated base content as conditioning context.
+
+Each seam tile's mask is a strip (single rectangle for arms, vertical-strip-OR-horizontal-strip cross for intersections), Gaussian-feathered with `mask_blend_pixels`.
+
+`Gen2_SeamMerger` composites each regenerated seam tile back onto the merged image using one of:
+
+- `linear` / `gaussian` — direct alpha composite, `final = merged·(1−mask) + seam·mask`. Identical for both modes on non-overlapping seam tiles (the mode names are kept for symmetry with `Gen2_TileMerger`).
+- `multi_band` — Laplacian-pyramid blend per seam tile against the canvas. Safe here (unlike in the first-pass merger) because the seam tile's non-strip region equals the canvas content, so there's no low-frequency disagreement to ring on. `blend_strength` controls pyramid depth (0 → 1 level, 1 → 6 levels).
+
+`histogram_matching = True` Reinhard-matches each seam tile's strip-region content to the surrounding (non-strip) merged-image context, ensuring the regenerated strip blends color-consistently with the existing canvas.
+
+#### `GEN2_SEAM_LAYOUT`
+
+A dict carrying the seam-tile geometry:
+
+```
+{
+  "original_height": int, "original_width": int,
+  "seam_strip_width": int, "mask_blend_pixels": int,
+  "seam_tile_thickness_h": int, "seam_tile_thickness_w": int,
+  "verticals": [int, ...],    # x-coords of vertical seams
+  "horizontals": [int, ...],  # y-coords of horizontal seams
+  "tiles": [
+    {
+      "kind": "intersection" | "arm",
+      "axis": "vertical" | "horizontal" | None,    # None for intersection
+      "y": int, "x": int, "h": int, "w": int,      # image-space crop
+      "strips": [                                  # 1 entry for arm, 2 for intersection
+        {"axis": "vertical" | "horizontal",
+         "center_local": int, "width": int},
+        ...
+      ],
+      "seam_axes_coords": [int, ...]               # coords of the seam(s) this tile fixes
+    },
+    ...
+  ]
+}
+```
+
 #### Verifying the tiling nodes
 
 A standalone smoke test lives at `tiling/_smoke_test.py`. It covers clean partitions, the `last_tile_wins` remainder case, the no-halo edge case, Gaussian-feathered masks, and merger round-trip identity for `none`/`linear`/`gaussian`/`multi_band` blend modes and `optimal` seam:
@@ -145,6 +212,7 @@ Supports multiple precision modes:
 - [x] Reorganize code for better maintenance — split into `qwenimage/` (core + nodes) and `misc_nodes/` (pose, string utils)
 - [x] Tiling: `Gen2_TileSplitter` and `Gen2_TileMasks` with the auto-partition + halo-expansion algorithm
 - [x] Tiling: `Gen2_TileMerger` with `none` / `linear` / `gaussian` / `multi_band` blend modes, optimal-seam DP, and Reinhard histogram matching
+- [x] Tiling: `Gen2_SeamFix` + `Gen2_SeamMerger` for a two-pass seam-denoise workflow that smooths the boundaries between independently-sampled tile bases
 
 ## License
 

@@ -296,10 +296,21 @@ class Gen2_TileMerger:
     # ------------------------------------------------------------------
 
     def _compose_paste(self, tiles, splits, masks, B, H, W, C, dtype, device):
-        """blend_mode='none': paste each tile's content weighted by its (binary)
-        mask. With the default base-only mask the union of placements covers
-        every pixel exactly once."""
+        """blend_mode='none': normalized weighted average using the provided
+        (or default binary) masks.
+
+        Reduces to an exact direct paste when the masks are binary (each pixel
+        has exactly one mask=1 across all tiles, so sum=1 and division is a
+        no-op). When the masks are feathered (e.g. Gen2_TileMasks with
+        mask_blend_pixels > 0), normalization prevents the dimming that an
+        alpha-overlay 'canvas*(1-m) + tile*m' formula would otherwise produce
+        at tile-grid seams and image edges.
+
+        Also robust against samplers that output incorrect content in tile
+        halos: zero-mask halos contribute zero weight and are ignored.
+        """
         canvas = torch.zeros((B, H, W, C), dtype=dtype, device=device)
+        weight = torch.zeros((1, H, W, 1), dtype=dtype, device=device)
         for i, s in enumerate(splits):
             tile = tiles[i]
             mask = masks[i]
@@ -307,7 +318,10 @@ class Gen2_TileMerger:
             tile_crop = tile[:, ly0:ly1, lx0:lx1, :]
             mask_crop = mask[ly0:ly1, lx0:lx1]
             m = mask_crop[None, :, :, None]
-            canvas[:, iy0:iy1, ix0:ix1, :] = canvas[:, iy0:iy1, ix0:ix1, :] * (1.0 - m) + tile_crop * m
+            canvas[:, iy0:iy1, ix0:ix1, :] += tile_crop * m
+            weight[:, iy0:iy1, ix0:ix1, :] += m
+        eps = 1e-8
+        canvas = canvas / weight.clamp(min=eps)
         return canvas
 
     def _compose_weighted(self, tiles, splits, masks, B, H, W, C, dtype, device):
