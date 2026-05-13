@@ -46,6 +46,8 @@ if _PARENT not in sys.path:
 from tiling.tile_splitter import Gen2_TileSplitter
 from tiling.tile_masks import Gen2_TileMasks
 from tiling.tile_merger import Gen2_TileMerger
+from tiling.seam_fix import Gen2_SeamFix
+from tiling.seam_merger import Gen2_SeamMerger
 
 
 def _make_pattern_image(h: int, w: int) -> torch.Tensor:
@@ -469,6 +471,256 @@ def scenario_merger_optimal_seam():
     print(f"{label} OK")
 
 
+def scenario_merger_none_feathered_masks():
+    """Regression: blend_mode='none' fed feathered masks (mask_blend_pixels>0)
+    must NOT dim the result at tile-grid seams.
+
+    With the old alpha-overlay 'canvas*(1-m)+tile*m' formula, identity round-
+    trip showed max diff ~0.72 with a clear seam-cross pattern. With the fix
+    (normalized weighted average), identity should be exact regardless of how
+    much feathering Gen2_TileMasks applies.
+    """
+    label = "[scenario 8: merger blend_mode='none' with feathered masks]"
+    print(label)
+
+    H, W = 2048, 2048
+    img = _make_pattern_image(H, W)
+
+    splitter = Gen2_TileSplitter()
+    layout, tiles = splitter.split(img, tile_size=1024, overlap_pct=0.25)
+
+    masker = Gen2_TileMasks()
+    merger = Gen2_TileMerger()
+
+    for mask_blend_pixels in (0, 4, 16, 32):
+        (masks,) = masker.make_masks(layout, mask_blend_pixels=mask_blend_pixels)
+        (out,) = merger.merge(
+            tile_layout=[layout],
+            blend_mode=["none"],
+            blend_strength=[1.0],
+            seam_mode=["middle"],
+            histogram_matching=[False],
+            processed_tiles_image_list=list(tiles),
+            masks_list=list(masks),
+        )
+        _assert_tensor_eq(
+            out,
+            img,
+            f"{label} mask_blend_pixels={mask_blend_pixels} identity",
+            atol=1e-4,
+        )
+
+    print(f"{label} OK")
+
+
+def _make_alt_image(h, w):
+    """Different gradient than _make_pattern_image so we can distinguish them."""
+    ys = torch.arange(h, dtype=torch.float32).view(h, 1).expand(h, w)
+    xs = torch.arange(w, dtype=torch.float32).view(1, w).expand(h, w)
+    r = 1.0 - ys / max(h - 1, 1)
+    g = 1.0 - xs / max(w - 1, 1)
+    b = (ys - xs).abs() / max(h - 1, w - 1, 1)
+    return torch.stack([r, g, b], dim=-1).unsqueeze(0)
+
+
+def scenario_seam_fix_geometry():
+    label = "[scenario 9: SeamFix geometry, 2048x2048, tile_size=1024, overlap_pct=0.25]"
+    print(label)
+
+    H, W = 2048, 2048
+    original = _make_pattern_image(H, W)
+    merged = _make_alt_image(H, W)
+
+    splitter = Gen2_TileSplitter()
+    layout, _ = splitter.split(original, tile_size=1024, overlap_pct=0.25)
+
+    sf = Gen2_SeamFix()
+    seam_layout, seam_tiles, seam_masks = sf.build(
+        original_image=original, merged_image=merged, tile_layout=layout,
+        seam_strip_width=128, mask_blend_pixels=32,
+    )
+
+    _assert_eq(seam_layout["verticals"], [1024], f"{label} vertical seams")
+    _assert_eq(seam_layout["horizontals"], [1024], f"{label} horizontal seams")
+    _assert_eq(seam_layout["seam_tile_thickness_h"], 640, f"{label} thickness h")
+    _assert_eq(seam_layout["seam_tile_thickness_w"], 640, f"{label} thickness w")
+
+    tiles_meta = seam_layout["tiles"]
+    _assert_eq(len(tiles_meta), 5, f"{label} total tile count")
+    _assert_eq(len(seam_tiles), 5, f"{label} seam_tiles list length")
+    _assert_eq(len(seam_masks), 5, f"{label} seam_masks list length")
+
+    intersections = [m for m in tiles_meta if m["kind"] == "intersection"]
+    arms = [m for m in tiles_meta if m["kind"] == "arm"]
+    v_arms = [m for m in arms if m["axis"] == "vertical"]
+    h_arms = [m for m in arms if m["axis"] == "horizontal"]
+    _assert_eq(len(intersections), 1, f"{label} intersection count")
+    _assert_eq(len(v_arms), 2, f"{label} vertical arm count")
+    _assert_eq(len(h_arms), 2, f"{label} horizontal arm count")
+
+    inter = intersections[0]
+    _assert_eq((inter["y"], inter["x"], inter["h"], inter["w"]),
+               (704, 704, 640, 640), f"{label} intersection rect")
+
+    v_rects = sorted([(m["y"], m["x"], m["h"], m["w"]) for m in v_arms])
+    _assert_eq(v_rects, [(0, 704, 704, 640), (1344, 704, 704, 640)],
+               f"{label} vertical-arm rects")
+    h_rects = sorted([(m["y"], m["x"], m["h"], m["w"]) for m in h_arms])
+    _assert_eq(h_rects, [(704, 0, 640, 704), (704, 1344, 640, 704)],
+               f"{label} horizontal-arm rects")
+
+    coverage = torch.zeros((H, W), dtype=torch.int32)
+    for m in tiles_meta:
+        coverage[m["y"]:m["y"] + m["h"], m["x"]:m["x"] + m["w"]] += 1
+    if int(coverage.max().item()) > 1:
+        raise AssertionError(f"{label} seam tiles overlap (max coverage {int(coverage.max().item())})")
+
+    for i, (m, t, mask) in enumerate(zip(tiles_meta, seam_tiles, seam_masks)):
+        _assert_eq(tuple(t.shape), (1, m["h"], m["w"], 3), f"{label} tile[{i}] shape")
+        _assert_eq(tuple(mask.shape), (1, m["h"], m["w"]), f"{label} mask[{i}] shape")
+
+    print(f"{label} OK")
+
+
+def scenario_seam_fix_content():
+    label = "[scenario 10: SeamFix tile content (strip replacement)]"
+    print(label)
+
+    H, W = 2048, 2048
+    original = _make_pattern_image(H, W)
+    merged = _make_alt_image(H, W)
+
+    splitter = Gen2_TileSplitter()
+    layout, _ = splitter.split(original, tile_size=1024, overlap_pct=0.25)
+    sf = Gen2_SeamFix()
+    seam_layout, seam_tiles, seam_masks = sf.build(
+        original_image=original, merged_image=merged, tile_layout=layout,
+        seam_strip_width=128, mask_blend_pixels=32,
+    )
+
+    for i, meta in enumerate(seam_layout["tiles"]):
+        y, x, h, w = meta["y"], meta["x"], meta["h"], meta["w"]
+        hard = torch.zeros((h, w), dtype=torch.bool)
+        for strip in meta["strips"]:
+            center = int(strip["center_local"])
+            half = int(strip["width"]) // 2
+            if strip["axis"] == "vertical":
+                lo = max(0, center - half)
+                hi = min(w, center + half)
+                hard[:, lo:hi] = True
+            else:
+                lo = max(0, center - half)
+                hi = min(h, center + half)
+                hard[lo:hi, :] = True
+
+        t = seam_tiles[i]
+        merged_crop = merged[:, y:y + h, x:x + w, :]
+        original_crop = original[:, y:y + h, x:x + w, :]
+
+        outside = ~hard
+        if outside.any():
+            _assert_tensor_eq(t[:, outside, :], merged_crop[:, outside, :],
+                              f"{label} tile[{i}] outside-strip == merged")
+        if hard.any():
+            _assert_tensor_eq(t[:, hard, :], original_crop[:, hard, :],
+                              f"{label} tile[{i}] inside-strip == original")
+
+    print(f"{label} OK")
+
+
+def scenario_seam_merger_passthrough():
+    """If we feed the SeamFix tiles straight back into SeamMerger with hard
+    masks (mask_blend_pixels=0), the final image should be:
+      - merged image where no seam strip covers it
+      - original image inside seam strips (because SeamFix replaced them)
+    """
+    label = "[scenario 11: SeamMerger passthrough composition]"
+    print(label)
+
+    H, W = 2048, 2048
+    original = _make_pattern_image(H, W)
+    merged = _make_alt_image(H, W)
+
+    splitter = Gen2_TileSplitter()
+    layout, _ = splitter.split(original, tile_size=1024, overlap_pct=0.25)
+    sf = Gen2_SeamFix()
+    seam_layout, seam_tiles, seam_masks = sf.build(
+        original_image=original, merged_image=merged, tile_layout=layout,
+        seam_strip_width=128, mask_blend_pixels=0,
+    )
+
+    sm = Gen2_SeamMerger()
+    (final,) = sm.merge(
+        merged_image=[merged],
+        seam_layout=[seam_layout],
+        blend_mode=["linear"],
+        blend_strength=[0.5],
+        histogram_matching=[False],
+        processed_seam_tiles_list=list(seam_tiles),
+        seam_tiles_masks_list=list(seam_masks),
+    )
+
+    expected = merged.clone()
+    for meta in seam_layout["tiles"]:
+        y, x, h, w = meta["y"], meta["x"], meta["h"], meta["w"]
+        for strip in meta["strips"]:
+            center = int(strip["center_local"])
+            half = int(strip["width"]) // 2
+            if strip["axis"] == "vertical":
+                lo = max(0, center - half)
+                hi = min(w, center + half)
+                expected[:, y:y + h, x + lo:x + hi, :] = original[:, y:y + h, x + lo:x + hi, :]
+            else:
+                lo = max(0, center - half)
+                hi = min(h, center + half)
+                expected[:, y + lo:y + hi, x:x + w, :] = original[:, y + lo:y + hi, x:x + w, :]
+
+    _assert_tensor_eq(final, expected, f"{label} final == expected", atol=1e-5)
+    print(f"{label} OK")
+
+
+def scenario_seam_merger_modes_run():
+    """Smoke-run all three blend_modes + histogram_matching to make sure
+    nothing crashes; final image must be in [0, 1]."""
+    label = "[scenario 12: SeamMerger modes/histogram run cleanly]"
+    print(label)
+
+    H, W = 2048, 2048
+    original = _make_pattern_image(H, W)
+    merged = _make_alt_image(H, W)
+
+    splitter = Gen2_TileSplitter()
+    layout, _ = splitter.split(original, tile_size=1024, overlap_pct=0.25)
+    sf = Gen2_SeamFix()
+    seam_layout, seam_tiles, seam_masks = sf.build(
+        original_image=original, merged_image=merged, tile_layout=layout,
+        seam_strip_width=128, mask_blend_pixels=32,
+    )
+
+    sm = Gen2_SeamMerger()
+    for mode in ("linear", "gaussian", "multi_band"):
+        for hist in (False, True):
+            (final,) = sm.merge(
+                merged_image=[merged],
+                seam_layout=[seam_layout],
+                blend_mode=[mode],
+                blend_strength=[0.5],
+                histogram_matching=[hist],
+                processed_seam_tiles_list=list(seam_tiles),
+                seam_tiles_masks_list=list(seam_masks),
+            )
+            _assert_eq(tuple(final.shape), tuple(merged.shape),
+                       f"{label} mode={mode} hist={hist} shape")
+            mn = final.min().item()
+            mx = final.max().item()
+            if mn < -1e-3 or mx > 1.0 + 1e-3:
+                raise AssertionError(
+                    f"{label} mode={mode} hist={hist} out of range: min={mn} max={mx}"
+                )
+
+    print(f"{label} OK")
+
+
 def main():
     scenario_clean_partition()
     scenario_last_tile_wins()
@@ -477,6 +729,11 @@ def main():
     scenario_merger_roundtrip()
     scenario_merger_last_tile_wins()
     scenario_merger_optimal_seam()
+    scenario_merger_none_feathered_masks()
+    scenario_seam_fix_geometry()
+    scenario_seam_fix_content()
+    scenario_seam_merger_passthrough()
+    scenario_seam_merger_modes_run()
     print("\nAll scenarios passed.")
 
 
