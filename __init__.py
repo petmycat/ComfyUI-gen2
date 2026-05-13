@@ -25,15 +25,28 @@ except ImportError as e:
     MISC_NODE_DISPLAY_NAME_MAPPINGS = {}
     MISC_AVAILABLE = False
 
+# Import Tiling nodes (tile splitter, masks, merger)
+try:
+    from .tiling import NODE_CLASS_MAPPINGS as TILING_NODE_CLASS_MAPPINGS
+    from .tiling import NODE_DISPLAY_NAME_MAPPINGS as TILING_NODE_DISPLAY_NAME_MAPPINGS
+    TILING_AVAILABLE = True
+except ImportError as e:
+    print(f"[Gen2] Tiling nodes not available: {e}")
+    TILING_NODE_CLASS_MAPPINGS = {}
+    TILING_NODE_DISPLAY_NAME_MAPPINGS = {}
+    TILING_AVAILABLE = False
+
 # Combine all node mappings
 NODE_CLASS_MAPPINGS = {
     **QWENIMAGE_NODE_CLASS_MAPPINGS,
     **MISC_NODE_CLASS_MAPPINGS,
+    **TILING_NODE_CLASS_MAPPINGS,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     **QWENIMAGE_NODE_DISPLAY_NAME_MAPPINGS,
     **MISC_NODE_DISPLAY_NAME_MAPPINGS,
+    **TILING_NODE_DISPLAY_NAME_MAPPINGS,
 }
 
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']

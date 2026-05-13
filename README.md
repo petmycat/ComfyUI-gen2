@@ -27,7 +27,11 @@ Our nodes act as a bridge: ComfyUI handles the heavy lifting of model management
    ```bash
    cd ComfyUI/custom_nodes
    git clone https://github.com/petmycat/ComfyUI-gen2.git
+   cd ComfyUI-gen2
+   pip install -r requirements.txt
    ```
+
+   The only direct dependency is `scipy` (used by the tiling nodes for Gaussian mask feathering). If you skip it, the tiling submodule will fail to load with a `[Gen2] Tiling nodes not available: ...` message and the rest of the pack will keep working.
 
 3. **Tokenizer** - Download from [Qwen-Image-2512 on HuggingFace](https://huggingface.co/alibaba-pai/Qwen-Image-2512):
    - Navigate to the model's files and download all files from the `tokenizer/` folder
@@ -63,6 +67,68 @@ Example workflow and reference images are located in:
 | **Gen2 StringReplace** | Replace all occurrences of a search string with a replacement string (case-sensitive) |
 | **Gen2 Checkerboard** | Generate a checkerboard pattern image (1px black & white squares) at specified width × height |
 
+### Tiling
+
+A pair of nodes for tile-based image workflows (e.g. high-res inpaint, tiled upscaling). Tiles share a fixed-thickness overlap halo of surrounding context, while each tile's "owned" base region exactly partitions the original image — so the per-tile masks union to a full-image cover with no double-coverage.
+
+| Node | Description |
+|------|-------------|
+| **Gen2 Tile Splitter** | Auto-grid an image into uniform tiles with an overlap halo. Inputs: `image`, `tile_size`, `overlap_pct`. Outputs: `tile_layout` (`GEN2_TILE_LAYOUT`) and `tiles_image_list` (list of tile images, row-major). |
+| **Gen2 Tile Masks** | Build per-tile masks selecting each tile's owned base region. Inputs: `tile_layout`, `mask_blend_pixels`. Output: `masks_list` (list of `MASK`, same order as the splitter's tiles). Each mask has value `1.0` over the base region and `0.0` over the halo, with optional Gaussian feathering. |
+| **Gen2 Tile Merger** | Recombine processed tiles back into a single image. Inputs: `tile_layout`, `blend_mode`, `blend_strength`, `seam_mode`, `histogram_matching`, optional `processed_tiles_image_list`, optional `masks_list`. Output: `merged_image`. |
+
+#### Splitter algorithm
+
+- `n_rows = argmin_{n≥1} \|H/n − tile_size\|`, same for `n_cols`. No user knob — the grid is chosen automatically to minimize the distance from the target tile size.
+- Base regions exactly partition the original image: `base_h = floor(H/n_rows)` for the first `n_rows−1` rows; the last row absorbs any remainder. Same for columns.
+- `overlap_px = round(overlap_pct × base_dim_floor)` on each side. Every tile's expanded crop is `(base_h + 2·overlap_px_h) × (base_w + 2·overlap_px_w)`. Where the expansion falls outside the image, content is `replicate`-padded.
+- Example: 2048×2048 image with `tile_size=1024`, `overlap_pct=0.25` → 2×2 grid, four 1536×1536 tiles each carrying a 1024×1024 base region surrounded by a 256 px halo.
+
+#### `GEN2_TILE_LAYOUT`
+
+A dict carrying everything downstream nodes need to reconstruct the partition:
+
+```
+{
+  "original_height": int, "original_width": int,
+  "rows": int, "cols": int,
+  "overlap_px_h": int, "overlap_px_w": int,
+  "splits": [
+    {
+      "row": int, "col": int,
+      "y": int, "x": int, "h": int, "w": int,            # expanded crop, image-space
+      "base_y": int, "base_x": int, "base_h": int, "base_w": int,   # owned region, image-space
+      "base_y_local": int, "base_x_local": int,          # owned region, expanded-tile-local
+      "base_h_local": int, "base_w_local": int,
+    },
+    ...
+  ]
+}
+```
+
+#### Merger blend modes
+
+| `blend_mode` | Behavior |
+|---|---|
+| `none`        | **Base-only paste.** Halos are discarded; each tile contributes only its base region. The fast path for the masked-inpaint workflow (since halos are supposed to be unchanged context). When the optional `masks_list` is wired in, those masks are used directly (any per-tile shape, e.g. feathered base masks from `Gen2 Tile Masks`). |
+| `linear`      | **Normalized weighted average.** Per-tile linear-falloff mask, with the weighted average computed across all tiles covering each pixel. Identity-preserving in the round-trip test. |
+| `gaussian`    | Same as linear but with a Gaussian falloff whose sigma is `blend_strength × max(overlap_px) / 2`. The Gaussian plateau is inflated by `3σ` so the base region remains at `1.0` and the falloff lives entirely inside the halo. |
+| `multi_band`  | **Sequential Laplacian-pyramid blend.** Raster-order traversal: the first tile is pasted at full strength, then each subsequent tile pyramid-blends into the canvas using its Gaussian mask. Highest quality on high-contrast tile seams; slowest mode. |
+
+`seam_mode = "optimal"` runs a per-pixel DP min-cut through the `2·overlap_px` shared band between each adjacent tile pair and adjusts the masks to follow it. `seam_mode = "middle"` uses the natural geometric falloff with no DP. The DP loop is naive (Python-level inner loop) — fine for typical overlap sizes, slow for very large overlaps.
+
+`histogram_matching = True` applies a Reinhard mean/std color transfer to each tile (except the first column) using the left neighbor's `2·overlap_px` left-edge band as the reference. Useful when each tile is sampled independently and tile-to-tile color drift is visible.
+
+#### Verifying the tiling nodes
+
+A standalone smoke test lives at `tiling/_smoke_test.py`. It covers clean partitions, the `last_tile_wins` remainder case, the no-halo edge case, Gaussian-feathered masks, and merger round-trip identity for `none`/`linear`/`gaussian`/`multi_band` blend modes and `optimal` seam:
+
+```
+python ComfyUI/custom_nodes/ComfyUI-gen2/tiling/_smoke_test.py
+```
+
+The test asserts every tile's base region equals the corresponding image crop, halos pull the right content (real image for interior sides, replicate-pad for outer sides), masks have a `1.0` plateau exactly over the base region, stamping each tile's base region back into a fresh canvas reconstructs the original image bit-for-bit, and splitting then merging an image reproduces the original (exactly for `blend_mode="none"`, within float tolerance for the other modes).
+
 ## Dtype Support
 
 Supports multiple precision modes:
@@ -77,6 +143,8 @@ Supports multiple precision modes:
 - [ ] Decouple ControlNet node and sampler node
 - [ ] Add start and end step parameters to sampler node
 - [x] Reorganize code for better maintenance — split into `qwenimage/` (core + nodes) and `misc_nodes/` (pose, string utils)
+- [x] Tiling: `Gen2_TileSplitter` and `Gen2_TileMasks` with the auto-partition + halo-expansion algorithm
+- [x] Tiling: `Gen2_TileMerger` with `none` / `linear` / `gaussian` / `multi_band` blend modes, optimal-seam DP, and Reinhard histogram matching
 
 ## License
 
