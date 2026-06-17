@@ -1,63 +1,58 @@
 # ComfyUI-Gen2 Custom Nodes
 
-Custom ComfyUI nodes for QwenImage ControlNet and some other QoL nodes, designed to achieve **100% output compatibility with VideoX-Fun's diffusers pipeline** while leveraging ComfyUI's efficient model loading system.
+A general-purpose ComfyUI custom node pack collecting the sampling fixes, model-compatibility patches, and quality-of-life utilities we use day to day. The pack is organized into independent sections that each load on their own — if one section's optional dependency is missing, the rest keep working.
 
-## Why This Implementation?
+## What's in here
 
-We integrate with **ComfyUI's model loading nodes** (Load Diffusion Model, Load CLIP, Load VAE) but use our **own sampler and conditioning nodes**. This approach was chosen because:
+- **Gen2 Sampling** — compatibility patches that keep model behavior stable across ComfyUI upgrades. Currently: a fix that restores correct **Flux.2 [klein]** output (reference-latent / masked-inpaint workflows) on ComfyUI ≥ v0.17.0, where a core refactor silently changed results.
+- **Tiling** — tile-based workflow nodes: auto-grid splitting with overlap halos, per-tile masks, seam-aware merging, and a two-pass seam-fix denoise (great for high-res inpaint and tiled upscaling).
+- **Utilities** — small QoL nodes: string replace, checkerboard generator, DWpose-with-thresholds.
+- **QwenImage ControlNet** *(outdated)* — the pack's original purpose: a self-contained QwenImage ControlNet pipeline matching VideoX-Fun's diffusers output. Kept for backward compatibility; node names are suffixed **(outdated)**.
 
-1. **ComfyUI's model loading is highly optimized** - fast loading, memory efficient, supports quantized models (fp8, GGUF)
-2. **VideoX's sampling pipeline has specific requirements** - custom RoPE calculation, True CFG with norm rescaling, and packed 3D latent format that differ from ComfyUI's standard sampler
-3. **Exact output matching** - by replicating VideoX's exact forward logic while using ComfyUI's loaded weights, we achieve near identical outputs with the same seed
-
-Our nodes act as a bridge: ComfyUI handles the heavy lifting of model management, while we ensure the inference process matches VideoX exactly.
-
-## Credits
-
-- **[VideoX-Fun](https://github.com/aigc-apps/VideoX-Fun/tree/main/comfyui/qwenimage)** - The original QwenImage ControlNet implementation. Our pipeline logic is derived from their excellent work.
-- **[ComfyUI](https://github.com/Comfy-Org/ComfyUI)** - The powerful and modular diffusion model GUI that makes this integration possible.
+Most sections integrate with ComfyUI's own model loading (Load Diffusion Model / Load CLIP / Load VAE) and only override the specific inference behavior they need.
 
 ## Installation
 
-1. **Prerequisites** - Install these custom node packs first:
-   - [VideoX-Fun](https://github.com/aigc-apps/VideoX-Fun) - Required for model components and utilities
-   - [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) - Required if using GGUF quantized models
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/petmycat/ComfyUI-gen2.git
+cd ComfyUI-gen2
+pip install -r requirements.txt
+```
 
-2. **Install ComfyUI-Gen2**:
-   ```bash
-   cd ComfyUI/custom_nodes
-   git clone https://github.com/petmycat/ComfyUI-gen2.git
-   cd ComfyUI-gen2
-   pip install -r requirements.txt
-   ```
+Sections have independent, optional prerequisites — install only what you use:
 
-   The only direct dependency is `scipy` (used by the tiling nodes for Gaussian mask feathering). If you skip it, the tiling submodule will fail to load with a `[Gen2] Tiling nodes not available: ...` message and the rest of the pack will keep working.
+- **Gen2 Sampling / Utilities (string, checkerboard)** — no extra dependencies.
+- **Tiling** — needs `scipy` (Gaussian mask feathering). Without it you'll see `[Gen2] Tiling nodes not available: ...` and everything else still loads.
+- **DWpose utility** — needs `comfyui_controlnet_aux`.
+- **QwenImage ControlNet (outdated)** — needs [VideoX-Fun](https://github.com/aigc-apps/VideoX-Fun) (and [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) for GGUF models), plus the tokenizer from [Qwen-Image-2512](https://huggingface.co/alibaba-pai/Qwen-Image-2512) placed in `ComfyUI/models/gen2/qwen_2512_tokenizer/`.
 
-3. **Tokenizer** - Download from [Qwen-Image-2512 on HuggingFace](https://huggingface.co/alibaba-pai/Qwen-Image-2512):
-   - Navigate to the model's files and download all files from the `tokenizer/` folder
-   - Place them in:
-   ```
-   ComfyUI/models/gen2/qwen_2512_tokenizer/
-   ```
+## Credits
 
-## Example Workflow
-
-Example workflow and reference images are located in:
-- `workflows/qwen_control_example_workflow.json` - Example ComfyUI workflow
-- `assets/` - Reference images for testing (example (1).png, example (2).png)
+- **[ComfyUI](https://github.com/Comfy-Org/ComfyUI)** - The modular diffusion GUI this pack extends.
+- **[VideoX-Fun](https://github.com/aigc-apps/VideoX-Fun/tree/main/comfyui/qwenimage)** - The original QwenImage ControlNet implementation the (now outdated) QwenImage section is derived from.
 
 ## Nodes
 
-### QwenImage ControlNet
+### Gen2 Sampling
 
 | Node | Description |
 |------|-------------|
-| **Gen2 Load QwenImage ControlNet** | Load ControlNet weights |
-| **Gen2 Load QwenImage VAE** | Load VAE with VideoX-compatible config |
-| **Gen2 Apply QwenImage ControlNet** | Prepare control context and wrap model |
-| **Gen2 QwenImage Text Encode** | VideoX-style text encoding (use instead of CLIPTextEncode) |
-| **Gen2 Load QwenImage LoRA** | Load LoRA for VideoX-style merging |
-| **Gen2 QwenImage Control Sampler** | VideoX-compatible sampling with True CFG |
+| **Gen2 Flux.2 Klein Fix (#12905 revert)** | Restores pre-`44f1246` (PR #12905) Flux.2 [klein] sampling on ComfyUI ≥ v0.17.0. That commit's KV-cache refactor changed Klein output for normal `index` reference-latent workflows (e.g. masked inpaint) even though its new code paths are gated off. This node clones the model and, **only during its own sampling**, swaps the flux `forward_orig`/`_forward` back to the last-good (v0.16.4) implementation, then restores them — no ComfyUI core files are edited, so it survives `git pull`. Wire it `Load Diffusion Model → Gen2 Flux.2 Klein Fix → guider`. Don't combine it on the same model with `FluxKVCache` or the newer flux2 edit (`index_timestep_zero`) features, which are exactly what it reverts. |
+
+### QwenImage ControlNet (outdated)
+
+> These nodes are kept for backward compatibility and are no longer the focus of
+> this pack. Their display names are suffixed **(outdated)** in the node menu.
+
+| Node | Description |
+|------|-------------|
+| **Gen2 Load QwenImage ControlNet (outdated)** | Load ControlNet weights |
+| **Gen2 Load QwenImage VAE (outdated)** | Load VAE with VideoX-compatible config |
+| **Gen2 Apply QwenImage ControlNet (outdated)** | Prepare control context and wrap model |
+| **Gen2 QwenImage Text Encode (outdated)** | VideoX-style text encoding (use instead of CLIPTextEncode) |
+| **Gen2 Load QwenImage LoRA (outdated)** | Load LoRA for VideoX-style merging |
+| **Gen2 QwenImage Control Sampler (outdated)** | VideoX-compatible sampling with True CFG |
 
 ### Utilities
 

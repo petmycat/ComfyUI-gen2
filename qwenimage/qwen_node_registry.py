@@ -24,11 +24,11 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "Gen2_LoadQwenControlNetFun": "Gen2 Load QwenImage ControlNet",
-    "Gen2_LoadQwenVAE": "Gen2 Load QwenImage VAE",
-    "Gen2_ApplyQwenControlNetFun": "Gen2 Apply QwenImage ControlNet",
-    "Gen2_QwenClipTextEncode": "Gen2 QwenImage Text Encode",
-    "Gen2_LoadQwenLora": "Gen2 Load QwenImage LoRA",
-    "Gen2_QwenImageControlSampler": "Gen2 QwenImage Control Sampler",
+    "Gen2_LoadQwenControlNetFun": "Gen2 Load QwenImage ControlNet (outdated)",
+    "Gen2_LoadQwenVAE": "Gen2 Load QwenImage VAE (outdated)",
+    "Gen2_ApplyQwenControlNetFun": "Gen2 Apply QwenImage ControlNet (outdated)",
+    "Gen2_QwenClipTextEncode": "Gen2 QwenImage Text Encode (outdated)",
+    "Gen2_LoadQwenLora": "Gen2 Load QwenImage LoRA (outdated)",
+    "Gen2_QwenImageControlSampler": "Gen2 QwenImage Control Sampler (outdated)",
 }
 
