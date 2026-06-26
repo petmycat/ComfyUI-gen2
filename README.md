@@ -6,6 +6,7 @@ A general-purpose ComfyUI custom node pack collecting the sampling fixes, model-
 
 - **Gen2 Sampling** — compatibility patches that keep model behavior stable across ComfyUI upgrades. Currently: a fix that restores correct **Flux.2 [klein]** output (reference-latent / masked-inpaint workflows) on ComfyUI ≥ v0.17.0, where a core refactor silently changed results.
 - **Tiling** — tile-based workflow nodes: auto-grid splitting with overlap halos, per-tile masks, seam-aware merging, and a two-pass seam-fix denoise (great for high-res inpaint and tiled upscaling).
+- **API Panels** — a pair of configurable nodes (`Gen2 Input Panel` / `Gen2 Output Panel`) that replace a workflow's scattered `INPUT_*`/`OUTPUT_*` constant nodes. Click **Configure** to define named, typed parameters; each name becomes a typed slot and the API-export key. Designed for driving ComfyUI via the API export. Works on both the legacy LiteGraph and Nodes 2.0 (Vue) frontends.
 - **Utilities** — small QoL nodes: string replace, checkerboard generator, DWpose-with-thresholds.
 - **QwenImage ControlNet** *(outdated)* — the pack's original purpose: a self-contained QwenImage ControlNet pipeline matching VideoX-Fun's diffusers output. Kept for backward compatibility; node names are suffixed **(outdated)**.
 
@@ -190,6 +191,73 @@ python ComfyUI/custom_nodes/ComfyUI-gen2/tiling/_smoke_test.py
 ```
 
 The test asserts every tile's base region equals the corresponding image crop, halos pull the right content (real image for interior sides, replicate-pad for outer sides), masks have a `1.0` plateau exactly over the base region, stamping each tile's base region back into a fresh canvas reconstructs the original image bit-for-bit, and splitting then merging an image reproduces the original (exactly for `blend_mode="none"`, within float tolerance for the other modes).
+
+## API Panels
+
+A pair of configurable nodes that collapse a workflow's scattered `INPUT_*`/`OUTPUT_*` constant nodes into one panel each — for driving ComfyUI as a backend via the API export.
+
+| Node | Description |
+|------|-------------|
+| **Gen2 Input Panel** | Click **Configure** to define named, typed output parameters (STRING / INT / FLOAT / BOOLEAN / IMAGE). Each name becomes a typed output slot **and** the API-export key. Wire its `PANEL_LINK` output into a Gen2 Output Panel to bind the pair. |
+| **Gen2 Output Panel** | Click **Configure** to define named, typed input parameters. IMAGE inputs are saved to the output folder and their URLs returned via `/history` (like SaveImage). Wire a Gen2 Input Panel's `PANEL_LINK` output into this node's `PANEL_LINK` input. |
+
+Up to 32 parameters per panel. Supported types: `STRING`, `INT`, `FLOAT`, `BOOLEAN`, `IMAGE`.
+
+### Parameter properties
+
+Each parameter has a **name** (the API-export key + slot label), a **type**, and a **default** (can be empty/null = no default). INT and FLOAT parameters additionally accept **min**, **max**, and **step**:
+
+- **min / max** — the accepted value range. At execute time, an out-of-range value **interrupts the workflow** with a clear error message (e.g. `Gen2_InputPanel: parameter 'strength' = 1.5 is above max 1.0`), rather than silently clamping.
+- **step** — the UI snapping increment and documentation value (e.g. `0.05` means `1.00, 1.05, 1.10, …`).
+- **default** — the value used when no runtime value is provided. `null` means "no default" (the parameter must be provided). **Exporting the workflow/API always yields the default values, not whatever was set during a run** — the node's per-parameter widgets serialize defaults, so your exported workflow JSON is a clean template.
+
+### How it looks in the API export
+
+After configuring an Input Panel with `seed` (INT, default 0, min 0, max 999, step 1), `lora` (STRING, default `"f2k_q1Q2me1X2E_v1.safetensors"`), `loraStrength` (FLOAT, default 1.0, min 0, max 2, step 0.05), `genMode` (BOOLEAN, default false), `imageUrl` (IMAGE, default null), the API-export JSON is:
+
+```json
+"Gen2_InputPanel": {
+  "inputs": {
+    "_config": "[{\"name\":\"seed\",\"type\":\"INT\",\"default\":0,\"min\":0,\"max\":999,\"step\":1},...]",
+    "seed": 0,
+    "lora": "f2k_q1Q2me1X2E_v1.safetensors",
+    "loraStrength": 1.0,
+    "genMode": false,
+    "imageUrl": null
+  },
+  "class_type": "Gen2_InputPanel"
+}
+```
+
+Note the values are the **defaults**, not runtime values. An external frontend scans for `class_type == "Gen2_InputPanel"` and reads/writes the parameter keys directly — no more scanning node titles for `INPUT_*` prefixes.
+
+### JSON schema output
+
+The Gen2 Output Panel shows a **read-only JSON schema textbox** on its node body. When connected to an Input Panel via `PANEL_LINK` and the workflow is run, the textbox is populated with a JSON string listing every parameter's name, type, default, and range/step (for numeric types). Click the textbox (or the **Copy** button) to copy it for use elsewhere:
+
+```json
+[
+  {
+    "name": "strength",
+    "type": "FLOAT",
+    "default": 0.8,
+    "min": 0.0,
+    "max": 1.0,
+    "step": 0.05
+  },
+  {
+    "name": "prompt",
+    "type": "STRING",
+    "default": null
+  }
+]
+```
+
+The schema is sourced from the Input Panel's config (carried via `PANEL_LINK`), so it always reflects the input side's definitions.
+
+### Compatibility
+
+The backend uses the V3 node API (`io.ComfyNode` + `accept_all_inputs=True`); the frontend extension (`web/js/gen2Panels.js`, shipped via `WEB_DIRECTORY`) provides the Configure popup, per-parameter widgets (with range/step snapping for numbers, upload for images), and the JSON schema textbox. Works on both the legacy LiteGraph canvas and the Nodes 2.0 (Vue) frontend. Requires ComfyUI ≥ v0.10.0 (tested on v0.10.0 and v0.26.0).
 
 ## Dtype Support
 

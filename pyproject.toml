@@ -32,5 +32,5 @@ PublisherId = "petmycat"
 DisplayName = "ComfyUI-gen2"
 Icon = ""
 includes = [] 
-# "requires-comfyui" = ">=1.0.0"  # ComfyUI version compatibility
+"requires-comfyui" = ">=0.10.0"  # accept_all_inputs (V3 API) needs >=0.10.0; tested up to 0.26.0
 
