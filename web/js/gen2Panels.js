@@ -326,21 +326,26 @@ function ensureOverlay(node) {
 function positionOverlay(node, ctx) {
   const overlay = node.__gen2Overlay;
   if (!overlay) return;
-  // Position the overlay at the node's top-left, offset below the title bar.
-  const pos = node.pos;
-  const scale = ctx.canvas?.style?.zoom ? parseFloat(ctx.canvas.style.zoom) : 1;
-  // Use the node's absolute position on the canvas (LiteGraph keeps pos in canvas coords)
-  // The canvas element's transform handles the rest; we use absolute screen pos via getBoundingClientRect
-  const canvas = ctx.canvas;
-  if (!canvas) return;
-  const rect = canvas.getBoundingClientRect();
-  // Convert canvas-space to screen-space using the canvas DS (delta scale)
-  const ds = canvas.style.transform ? null : (window.LiteGraph?.Canvas?.current_ds || app.canvas?.ds);
-  let offsetX = pos[0], offsetY = pos[1];
-  if (ds) { offsetX = offsetX * ds.scale + ds.offset[0]; offsetY = offsetY * ds.scale + ds.offset[1]; }
-  else { offsetX = pos[0]; offsetY = pos[1]; }
-  overlay.style.left = (rect.left + offsetX + 8) + "px";
-  overlay.style.top = (rect.top + offsetY + 30) + "px";
+  // Get the LiteGraph canvas instance and its drag state (scale + offset).
+  // app.canvas is the LGraphCanvas; its .ds has {scale, offset} that transform
+  // canvas-space coordinates to canvas-element-space pixels.
+  const canvas = app.canvas;
+  if (!canvas || !canvas.ds) return;
+  const canvasEl = canvas.canvas || canvas.canvas_el;
+  if (!canvasEl) return;
+  const rect = canvasEl.getBoundingClientRect();
+  const ds = canvas.ds;
+  // Node's canvas-space position → screen position:
+  // screenX = rect.left + node.pos[0] * ds.scale + ds.offset[0]
+  // screenY = rect.top  + node.pos[1] * ds.scale + ds.offset[1]
+  // Then offset below the title bar (~30px at scale 1, scaled with zoom).
+  const screenX = rect.left + node.pos[0] * ds.scale + ds.offset[0] + 8 * ds.scale;
+  const screenY = rect.top + node.pos[1] * ds.scale + ds.offset[1] + 30 * ds.scale;
+  overlay.style.left = screenX + "px";
+  overlay.style.top = screenY + "px";
+  // Scale the overlay content to match canvas zoom so buttons don't get tiny/huge.
+  overlay.style.transformOrigin = "top left";
+  overlay.style.transform = "scale(" + ds.scale + ")";
 }
 
 function refreshImageButtons(node) {
