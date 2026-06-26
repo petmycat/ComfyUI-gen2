@@ -1,7 +1,7 @@
 [project]
 name = "gen2"
 description = "A general-purpose ComfyUI custom node pack: model-compatibility/sampling fixes (e.g. Flux.2 klein), tile-based workflow nodes, QoL utilities, and a (legacy) QwenImage ControlNet pipeline."
-version = "2.3.1"
+version = "2.4.1"
 license = {file = "LICENSE"} 
 # classifiers = [
 #     # For OS-independent nodes (works on all operating systems)
