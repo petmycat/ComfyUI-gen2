@@ -47,12 +47,24 @@ except ImportError as e:
     SAMPLING_NODE_DISPLAY_NAME_MAPPINGS = {}
     SAMPLING_AVAILABLE = False
 
+# Import Gen2 API nodes (V3 io.ComfyNode: Input Panel / Output Panel)
+try:
+    from .api_nodes import NODE_CLASS_MAPPINGS as API_NODE_CLASS_MAPPINGS
+    from .api_nodes import NODE_DISPLAY_NAME_MAPPINGS as API_NODE_DISPLAY_NAME_MAPPINGS
+    API_AVAILABLE = True
+except ImportError as e:
+    print(f"[Gen2] API panel nodes not available: {e}")
+    API_NODE_CLASS_MAPPINGS = {}
+    API_NODE_DISPLAY_NAME_MAPPINGS = {}
+    API_AVAILABLE = False
+
 # Combine all node mappings
 NODE_CLASS_MAPPINGS = {
     **QWENIMAGE_NODE_CLASS_MAPPINGS,
     **MISC_NODE_CLASS_MAPPINGS,
     **TILING_NODE_CLASS_MAPPINGS,
     **SAMPLING_NODE_CLASS_MAPPINGS,
+    **API_NODE_CLASS_MAPPINGS,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -60,6 +72,11 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **MISC_NODE_DISPLAY_NAME_MAPPINGS,
     **TILING_NODE_DISPLAY_NAME_MAPPINGS,
     **SAMPLING_NODE_DISPLAY_NAME_MAPPINGS,
+    **API_NODE_DISPLAY_NAME_MAPPINGS,
 }
 
-__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
+# Frontend extension: the Configure popup + dynamic slot management for the
+# Input/Output panels. Loaded by the browser from /extensions/ComfyUI-gen2/.
+WEB_DIRECTORY = "./web/js"
+
+__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
