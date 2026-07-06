@@ -11,20 +11,16 @@
 //   - default can be null (no default)
 //   - controlMode (INT only): fixed/randomize/increment/decrement
 //
-// Key behaviors:
-//  - The per-parameter widgets on the node body always show the DEFAULT value,
-//    and their serializeValue() returns the default. So exporting the workflow
-//    / API always yields defaults, not whatever was set during a run. The live
-//    runtime value is stored in a side widget "__val_<name>" which the backend
-//    reads first (falling back to default).
-//  - INT/FLOAT widgets use min/max/step for snapping.
-//  - IMAGE params get an upload widget (file picker + thumbnail).
-//  - The Output Panel shows a read-only JSON schema textbox (from PANEL_LINK).
-//  - A "Reset to defaults" button clears live values back to defaults.
+// Rendering: uses ONLY ComfyUI's standard widget APIs so it works on both the
+// legacy LiteGraph canvas and the Nodes 2.0 (Vue) renderer:
+//   - node.addWidget("button"/"number"/"text"/"toggle"/"combo", ...) for values
+//   - node.addDOMWidget(name, type, element, opts) for the IMAGE upload+preview
+//     and the JSON schema textbox
+// ComfyUI positions these widgets inside the node itself in both renderers.
 //
-// Designed to work on both the legacy LiteGraph canvas renderer and the Nodes
-// 2.0 (Vue) frontend. Uses onDrawForeground for button rendering (a standard
-// LiteGraph hook) to avoid fragility around custom DOM widget APIs.
+// Export-vs-live: each param's visible widget serializes the DEFAULT (so export
+// yields defaults). A hidden "__val_<name>" widget serializes the LIVE value,
+// which the backend reads first (falling back to default).
 
 import { app } from "../../scripts/app.js";
 
@@ -63,7 +59,7 @@ function setConfig(node, entries) {
   return w;
 }
 
-// ---- Image upload ----
+// ---- Image helpers (ComfyUI built-in endpoints) ----
 async function uploadImage(file) {
   const body = new FormData();
   body.append("image", file);
@@ -84,6 +80,14 @@ function filenameFromUpload(up) {
   return up.subfolder ? up.subfolder + "/" + up.name : up.name;
 }
 
+function imageRefToViewUrl(ref) {
+  if (!ref || typeof ref !== "string") return null;
+  const slash = ref.lastIndexOf("/");
+  const subfolder = slash >= 0 ? ref.slice(0, slash) : "";
+  const name = slash >= 0 ? ref.slice(slash + 1) : ref;
+  return viewUrl(name, subfolder, "input");
+}
+
 // ---- Slot management ----
 function applyInputPanelSlots(node, entries) {
   const desired = [PANEL_LINK_NAME], displayNames = ["panel_link"], types = ["*"];
@@ -102,7 +106,6 @@ function rebuildOutputs(node, names, displayNames, types) {
   while (node.outputs.length > names.length) node.removeOutput(node.outputs.length - 1);
   while (node.outputs.length < names.length) node.addOutput(names[node.outputs.length], types[node.outputs.length] || "*");
   for (let i = 0; i < node.outputs.length; i++) { node.outputs[i].name = names[i]; node.outputs[i].type = types[i] || "*"; node.outputs[i].label = displayNames[i]; }
-  if (typeof node.setSize === "function") node.setSize(node.computeSize());
 }
 
 function rebuildInputs(node, names, displayNames, types) {
@@ -110,62 +113,69 @@ function rebuildInputs(node, names, displayNames, types) {
   while (node.inputs.length > names.length) node.removeInput(node.inputs.length - 1);
   while (node.inputs.length < names.length) node.addInput(names[node.inputs.length], types[node.inputs.length] || "*");
   for (let i = 0; i < node.inputs.length; i++) { node.inputs[i].name = names[i]; node.inputs[i].type = types[i] || "*"; node.inputs[i].label = displayNames[i]; }
-  if (typeof node.setSize === "function") node.setSize(node.computeSize());
 }
 
-// ---- Per-parameter widgets ----
-// We use node.addWidget (standard LiteGraph, universally available) for the
-// parameter values, then override their serializeValue to return defaults.
-// For IMAGE params and the Configure/Reset buttons, we use onDrawForeground
-// to render HTML elements positioned over the node — a standard LiteGraph hook
-// that doesn't depend on custom widget APIs.
-
-function clearParamWidgets(node) {
-  if (!node.gen2ParamWidgets) return;
-  for (const pw of node.gen2ParamWidgets) {
-    // Remove standard widgets from node.widgets
-    if (pw.widget && node.widgets) {
-      const idx = node.widgets.indexOf(pw.widget);
-      if (idx >= 0) node.widgets.splice(idx, 1);
+// ---- Widget helpers ----
+// Remove all gen2-managed widgets (tagged __gen2Managed), keeping the framework
+// _config widget. Cleans up any DOM elements the widgets own.
+function clearManagedWidgets(node) {
+  if (!node.widgets) return;
+  const keep = [];
+  for (const w of node.widgets) {
+    if (w.__gen2Managed) {
+      try { if (w.element && w.element.parentNode) w.element.parentNode.removeChild(w.element); } catch (e) {}
+      try { w.onRemove?.(); } catch (e) {}
+      continue;
     }
-    if (pw.liveWidget && node.widgets) {
-      const idx = node.widgets.indexOf(pw.liveWidget);
-      if (idx >= 0) node.widgets.splice(idx, 1);
-    }
+    keep.push(w);
   }
+  node.widgets = keep;
   node.gen2ParamWidgets = [];
   node.gen2ControlHandlers = [];
+  node.gen2SchemaWidget = null;
 }
 
-function buildParamWidgets(node, entries) {
-  clearParamWidgets(node);
-  node.gen2ParamWidgets = [];
-  for (let i = 0; i < entries.length; i++) {
-    node.gen2ParamWidgets.push(makeParamWidget(node, i, entries[i]));
+function addButtonWidget(node, label, cb) {
+  const w = node.addWidget("button", label, "", cb, {});
+  w.__gen2Managed = true;
+  w.serializeValue = () => undefined;
+  return w;
+}
+
+// Add a DOM widget (works in both renderers) tagged as managed.
+function addManagedDOMWidget(node, name, element, opts) {
+  let w;
+  if (typeof node.addDOMWidget === "function") {
+    w = node.addDOMWidget(name, "gen2", element, Object.assign({ serialize: false, hideOnZoom: false }, opts || {}));
+  } else {
+    // Fallback (very old): push a minimal widget object.
+    w = { name, type: "gen2_dom", element, serializeValue: () => undefined };
+    node.widgets = node.widgets || [];
+    node.widgets.push(w);
   }
-  if (typeof node.setSize === "function") node.setSize(node.computeSize());
+  w.__gen2Managed = true;
+  return w;
 }
 
+// ---- Per-parameter value widgets ----
 function makeParamWidget(node, paramIndex, entry) {
   let curVal = entry.default ?? null;
   let widget = null;
 
   if (entry.type === "INT") {
-    widget = node.addWidget("number", entry.name, entry.default ?? 0, () => {}, { min: entry.min, max: entry.max, step: entry.step, precision: 0 });
+    widget = node.addWidget("number", entry.name, entry.default ?? 0, () => {}, { min: entry.min ?? undefined, max: entry.max ?? undefined, step: entry.step ?? undefined, precision: 0 });
     widget.serializeValue = () => entry.default ?? null;
-    const origSetValue = widget.setValue;
-    widget.setValue = function(v) { curVal = v; if (origSetValue) origSetValue.call(this, v); else this.value = v; };
-    widget.getLiveValue = () => curVal;
-    widget.setLiveValue = (v) => { curVal = v; widget.value = v; };
+    widget.getLiveValue = () => widget.value;
+    widget.setLiveValue = (v) => { widget.value = v; };
 
-    // control_after_generate dropdown
-    const ctrlWidget = node.addWidget("combo", entry.name + "_ctrl", entry.controlMode || "fixed", (v) => { entry.controlMode = v; persistConfig(node, paramIndex, entry); }, { values: ["fixed", "randomize", "increment", "decrement"] });
-    ctrlWidget.serializeValue = () => undefined; // not serialized into prompt
+    const ctrlWidget = node.addWidget("combo", entry.name + " (after run)", entry.controlMode || "fixed", (v) => { entry.controlMode = v; persistConfig(node, paramIndex, entry); }, { values: ["fixed", "randomize", "increment", "decrement"] });
+    ctrlWidget.serializeValue = () => undefined;
+    ctrlWidget.__gen2Managed = true;
 
     const applyControlMode = () => {
       const mode = ctrlWidget.value;
       if (mode === "fixed") return;
-      let v = curVal; if (v == null || isNaN(v)) v = 0; v = parseInt(v, 10);
+      let v = widget.value; if (v == null || isNaN(v)) v = 0; v = parseInt(v, 10);
       const lo = entry.min != null ? entry.min : 0;
       const hi = entry.max != null ? entry.max : 0xffffffffffffffff;
       if (mode === "randomize") v = Math.floor(Math.random() * (hi - lo + 1)) + lo;
@@ -177,7 +187,7 @@ function makeParamWidget(node, paramIndex, entry) {
     node.gen2ControlHandlers.push(applyControlMode);
 
   } else if (entry.type === "FLOAT") {
-    widget = node.addWidget("number", entry.name, entry.default ?? 0.0, () => {}, { min: entry.min, max: entry.max, step: entry.step });
+    widget = node.addWidget("number", entry.name, entry.default ?? 0.0, () => {}, { min: entry.min ?? undefined, max: entry.max ?? undefined, step: entry.step ?? undefined });
     widget.serializeValue = () => entry.default ?? null;
     widget.getLiveValue = () => widget.value;
     widget.setLiveValue = (v) => { widget.value = v; };
@@ -195,24 +205,95 @@ function makeParamWidget(node, paramIndex, entry) {
     widget.setLiveValue = (v) => { widget.value = v ?? ""; };
 
   } else if (entry.type === "IMAGE") {
-    // For IMAGE, we store the filename as a hidden string widget. The upload
-    // UI is handled via onDrawForeground (see makeImageOverlay).
-    widget = node.addWidget("text", entry.name, entry.default ?? "", () => {});
-    widget.serializeValue = () => entry.default ?? null;
-    widget.getLiveValue = () => widget.value;
-    widget.setLiveValue = (v) => { widget.value = v ?? ""; };
-    // Mark it so onDrawForeground knows to draw an upload button for it.
-    widget.__gen2Image = true;
-    widget.__gen2Entry = entry;
-    widget.__gen2ParamIndex = paramIndex;
+    // Value holder is a hidden logical widget (not rendered). The UI is a DOM
+    // widget with an upload button + thumbnail preview.
+    let imgVal = entry.default ?? null;
+    widget = {
+      name: entry.name,
+      type: "gen2_image_value",
+      value: imgVal,
+      serializeValue: () => entry.default ?? null,
+      getLiveValue: () => imgVal,
+      setLiveValue: (v) => { imgVal = v; if (widget.__updateThumb) widget.__updateThumb(); },
+      computeSize: () => [0, 0],
+      draw: () => {},
+      __gen2Managed: true,
+    };
+    node.widgets = node.widgets || [];
+    node.widgets.push(widget);
+
+    // DOM widget: label + button + thumbnail.
+    const el = document.createElement("div");
+    el.style.display = "flex"; el.style.flexDirection = "column"; el.style.gap = "4px"; el.style.padding = "2px 0";
+
+    const btn = document.createElement("button");
+    btn.textContent = "Choose / Upload " + entry.name;
+    btn.style.cursor = "pointer"; btn.style.padding = "4px 8px"; btn.style.fontSize = "12px";
+    btn.style.borderRadius = "4px";
+    btn.style.background = "var(--comfy-input-bg, #333)"; btn.style.color = "var(--fg-color, #fff)";
+    btn.style.border = "1px solid var(--border-color, #555)";
+    el.appendChild(btn);
+
+    const fileInput = document.createElement("input");
+    fileInput.type = "file"; fileInput.accept = "image/*"; fileInput.style.display = "none";
+    el.appendChild(fileInput);
+
+    const thumb = document.createElement("img");
+    thumb.style.display = "none"; thumb.style.maxWidth = "100%"; thumb.style.maxHeight = "180px";
+    thumb.style.objectFit = "contain"; thumb.style.borderRadius = "3px"; thumb.style.cursor = "pointer";
+    thumb.title = "Click to view full size";
+    el.appendChild(thumb);
+
+    const fnameLbl = document.createElement("div");
+    fnameLbl.style.fontSize = "10px"; fnameLbl.style.opacity = "0.65";
+    fnameLbl.style.overflow = "hidden"; fnameLbl.style.textOverflow = "ellipsis"; fnameLbl.style.whiteSpace = "nowrap";
+    el.appendChild(fnameLbl);
+
+    const updateThumb = () => {
+      const url = imageRefToViewUrl(imgVal);
+      if (url) { thumb.src = url; thumb.style.display = "block"; fnameLbl.textContent = String(imgVal).split("/").pop(); fnameLbl.title = imgVal; }
+      else { thumb.style.display = "none"; fnameLbl.textContent = "no image"; }
+    };
+    widget.__updateThumb = updateThumb;
+
+    const doUpload = async (file) => {
+      if (!file) return;
+      btn.textContent = "Uploading...";
+      try {
+        const up = await uploadImage(file);
+        const fname = filenameFromUpload(up);
+        entry.default = fname; imgVal = fname;
+        persistConfig(node, paramIndex, entry);
+        updateThumb();
+      } catch (err) { console.error("[gen2] upload failed", err); }
+      btn.textContent = "Choose / Upload " + entry.name;
+    };
+    fileInput.addEventListener("change", () => doUpload(fileInput.files && fileInput.files[0]));
+    btn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); fileInput.click(); });
+    thumb.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); const u = imageRefToViewUrl(imgVal); if (u) window.open(u, "_blank"); });
+    el.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); el.style.outline = "2px solid var(--p-primary-color, #4af)"; });
+    el.addEventListener("dragleave", (e) => { e.preventDefault(); e.stopPropagation(); el.style.outline = "none"; });
+    el.addEventListener("drop", (e) => { e.preventDefault(); e.stopPropagation(); el.style.outline = "none"; const f = e.dataTransfer?.files && e.dataTransfer.files[0]; if (f) doUpload(f); });
+
+    addManagedDOMWidget(node, "__img_" + entry.name, el, { getValue: () => imgVal, setValue: (v) => { imgVal = v; updateThumb(); } });
+    updateThumb();
   }
 
-  // Hidden side widget for the live value under __val_<name>
+  if (widget && !widget.__gen2Managed) widget.__gen2Managed = true;
+
+  // Hidden side widget carrying the live value under __val_<name>.
   const liveName = "__val_" + entry.name;
-  const liveWidget = node.addWidget("text", liveName, entry.default ?? null, () => {});
-  liveWidget.serializeValue = () => widget.getLiveValue();
-  liveWidget.computeSize = () => [0, 0];
-  // Hide it from the node body by making it not render (ComfyUI skips zero-size)
+  const liveWidget = {
+    name: liveName,
+    type: "gen2_live_value",
+    value: entry.default ?? null,
+    serializeValue: () => widget.getLiveValue(),
+    computeSize: () => [0, 0],
+    draw: () => {},
+    __gen2Managed: true,
+  };
+  node.widgets = node.widgets || [];
+  node.widgets.push(liveWidget);
 
   return { widget, liveWidget, paramIndex, entry };
 }
@@ -225,175 +306,77 @@ function persistConfig(node, paramIndex, entry) {
   w.value = serializeConfig(all);
 }
 
-// ---- onDrawForeground: renders Configure/Reset buttons + IMAGE upload overlays ----
-// This is a standard LiteGraph hook called every frame when the node is visible.
-// We draw HTML elements positioned over the node. This avoids relying on custom
-// DOM widget APIs which vary across ComfyUI versions.
-
-function ensureOverlay(node) {
-  if (node.__gen2Overlay) return node.__gen2Overlay;
-  const overlay = document.createElement("div");
-  overlay.style.position = "absolute";
-  overlay.style.pointerEvents = "none";
-  overlay.style.zIndex = "1000";
-  document.body.appendChild(overlay);
-  node.__gen2Overlay = overlay;
-
-  // Configure button
-  const cfgBtn = document.createElement("button");
-  cfgBtn.textContent = "Configure";
-  cfgBtn.style.pointerEvents = "auto";
-  cfgBtn.style.cursor = "pointer";
-  cfgBtn.style.padding = "3px 10px";
-  cfgBtn.style.fontSize = "12px";
-  cfgBtn.style.borderRadius = "4px";
-  cfgBtn.style.background = "var(--comfy-input-bg, #333)";
-  cfgBtn.style.color = "var(--fg-color, #fff)";
-  cfgBtn.style.border = "1px solid var(--border-color, #555)";
-  cfgBtn.style.display = "block";
-  cfgBtn.style.marginBottom = "4px";
-  cfgBtn.addEventListener("click", (e) => {
-    e.preventDefault(); e.stopPropagation();
-    const mode = NODE_TYPES[node.comfyClass]?.mode || "input";
-    openConfigDialog(node, mode);
-  });
-  overlay.appendChild(cfgBtn);
-  node.__gen2CfgBtn = cfgBtn;
-
-  // Reset button (input panel only)
-  const mode = NODE_TYPES[node.comfyClass]?.mode;
-  if (mode === "input") {
-    const resetBtn = document.createElement("button");
-    resetBtn.textContent = "Reset to defaults";
-    resetBtn.style.pointerEvents = "auto";
-    resetBtn.style.cursor = "pointer";
-    resetBtn.style.padding = "3px 10px";
-    resetBtn.style.fontSize = "11px";
-    resetBtn.style.borderRadius = "4px";
-    resetBtn.style.background = "var(--comfy-input-bg, #333)";
-    resetBtn.style.color = "var(--fg-color, #fff)";
-    resetBtn.style.border = "1px solid var(--border-color, #555)";
-    resetBtn.style.display = "block";
-    resetBtn.style.marginBottom = "4px";
-    resetBtn.addEventListener("click", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      if (!node.gen2ParamWidgets) return;
-      for (const pw of node.gen2ParamWidgets) {
-        pw.widget.setLiveValue(pw.entry.default ?? null);
-      }
-      if (typeof node.setDirtyCanvas === "function") node.setDirtyCanvas(true, true);
-      resetBtn.textContent = "Reset ✓";
-      setTimeout(() => { resetBtn.textContent = "Reset to defaults"; }, 1000);
-    });
-    overlay.appendChild(resetBtn);
-    node.__gen2ResetBtn = resetBtn;
-  }
-
-  // Schema textbox (output panel only)
-  if (mode === "output") {
-    const lbl = document.createElement("div");
-    lbl.textContent = "JSON schema";
-    lbl.style.fontSize = "11px"; lbl.style.opacity = "0.7"; lbl.style.marginBottom = "2px";
-    lbl.style.pointerEvents = "none";
-    overlay.appendChild(lbl);
-
-    const ta = document.createElement("textarea");
-    ta.readOnly = true; ta.rows = 8;
-    ta.style.width = "300px"; ta.style.fontSize = "11px"; ta.style.fontFamily = "monospace";
-    ta.style.background = "var(--comfy-input-bg, #1a1a1a)"; ta.style.color = "var(--fg-color, #ddd)";
-    ta.style.border = "1px solid var(--border-color, #444)"; ta.style.borderRadius = "3px";
-    ta.style.resize = "vertical"; ta.style.pointerEvents = "auto"; ta.style.display = "block";
-    ta.placeholder = "Connect an Input Panel's PANEL_LINK and run to see the schema.";
-    ta.addEventListener("focus", () => ta.select());
-    overlay.appendChild(ta);
-    node.__gen2SchemaTa = ta;
-
-    const copyBtn = document.createElement("button");
-    copyBtn.textContent = "Copy"; copyBtn.style.pointerEvents = "auto"; copyBtn.style.cursor = "pointer";
-    copyBtn.style.fontSize = "11px"; copyBtn.style.padding = "2px 8px"; copyBtn.style.marginTop = "2px";
-    copyBtn.addEventListener("click", (e) => {
-      e.preventDefault(); e.stopPropagation(); ta.select();
-      try { document.execCommand("copy"); copyBtn.textContent = "Copied!"; setTimeout(() => { copyBtn.textContent = "Copy"; }, 1200); } catch (err) {}
-    });
-    overlay.appendChild(copyBtn);
-  }
-
-  // IMAGE upload buttons container
-  node.__gen2ImageBtns = {};
-  return overlay;
-}
-
-function positionOverlay(node, ctx) {
-  const overlay = node.__gen2Overlay;
-  if (!overlay) return;
-  // Get the LiteGraph canvas instance and its drag state (scale + offset).
-  // app.canvas is the LGraphCanvas; its .ds has {scale, offset} that transform
-  // canvas-space coordinates to canvas-element-space pixels.
-  const canvas = app.canvas;
-  if (!canvas || !canvas.ds) return;
-  const canvasEl = canvas.canvas || canvas.canvas_el;
-  if (!canvasEl) return;
-  const rect = canvasEl.getBoundingClientRect();
-  const ds = canvas.ds;
-  // Node's canvas-space position → screen position:
-  // screenX = rect.left + node.pos[0] * ds.scale + ds.offset[0]
-  // screenY = rect.top  + node.pos[1] * ds.scale + ds.offset[1]
-  // Then offset below the title bar (~30px at scale 1, scaled with zoom).
-  const screenX = rect.left + node.pos[0] * ds.scale + ds.offset[0] + 8 * ds.scale;
-  const screenY = rect.top + node.pos[1] * ds.scale + ds.offset[1] + 30 * ds.scale;
-  overlay.style.left = screenX + "px";
-  overlay.style.top = screenY + "px";
-  // Scale the overlay content to match canvas zoom so buttons don't get tiny/huge.
-  overlay.style.transformOrigin = "top left";
-  overlay.style.transform = "scale(" + ds.scale + ")";
-}
-
-function refreshImageButtons(node) {
-  if (!node.gen2ParamWidgets) return;
-  for (const pw of node.gen2ParamWidgets) {
-    if (!pw.widget.__gen2Image) continue;
-    const name = pw.entry.name;
-    let btn = node.__gen2ImageBtns[name];
-    if (!btn) {
-      btn = document.createElement("button");
-      btn.textContent = "Upload " + name;
-      btn.style.pointerEvents = "auto"; btn.style.cursor = "pointer";
-      btn.style.padding = "2px 8px"; btn.style.fontSize = "11px";
-      btn.style.borderRadius = "3px"; btn.style.marginBottom = "2px"; btn.style.display = "block";
-      btn.style.background = "var(--comfy-input-bg, #333)"; btn.style.color = "var(--fg-color, #fff)";
-      btn.style.border = "1px solid var(--border-color, #555)";
-      const fileInput = document.createElement("input");
-      fileInput.type = "file"; fileInput.accept = "image/*"; fileInput.style.display = "none";
-      fileInput.addEventListener("change", async () => {
-        const file = fileInput.files && fileInput.files[0]; if (!file) return;
-        btn.textContent = "...";
-        try {
-          const up = await uploadImage(file);
-          const fname = filenameFromUpload(up);
-          pw.entry.default = fname;
-          pw.widget.setLiveValue(fname);
-          persistConfig(node, pw.paramIndex, pw.entry);
-        } catch (err) { btn.textContent = "failed"; }
-        finally { btn.textContent = "Upload " + name; }
-      });
-      btn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); fileInput.click(); });
-      btn.appendChild(fileInput);
-      node.__gen2Overlay.appendChild(btn);
-      node.__gen2ImageBtns[name] = btn;
-    }
-  }
-}
-
-function refreshSchemaBox(node) {
-  if (!node.__gen2SchemaTa) return;
-  const entries = parseConfig(getConfigWidget(node)?.value || "[]");
+// ---- JSON schema DOM widget (output panel) ----
+function buildSchemaJsonLocal(entries) {
   const out = entries.map((e) => {
     const o = { name: e.name, type: e.type, default: e.default ?? null };
     if (NUMERIC_TYPES.includes(e.type)) { o.min = e.min ?? null; o.max = e.max ?? null; o.step = e.step ?? null; }
     if (e.type === "INT" && e.controlMode && e.controlMode !== "fixed") o.controlMode = e.controlMode;
     return o;
   });
-  node.__gen2SchemaTa.value = JSON.stringify(out, null, 2);
+  return JSON.stringify(out, null, 2);
+}
+
+function addSchemaWidget(node) {
+  const el = document.createElement("div");
+  el.style.display = "flex"; el.style.flexDirection = "column"; el.style.gap = "3px"; el.style.padding = "2px 0";
+
+  const lbl = document.createElement("div");
+  lbl.textContent = "JSON schema"; lbl.style.fontSize = "11px"; lbl.style.opacity = "0.7";
+  el.appendChild(lbl);
+
+  const ta = document.createElement("textarea");
+  ta.readOnly = true; ta.rows = 8;
+  ta.style.width = "100%"; ta.style.boxSizing = "border-box"; ta.style.fontSize = "11px"; ta.style.fontFamily = "monospace";
+  ta.style.background = "var(--comfy-input-bg, #1a1a1a)"; ta.style.color = "var(--fg-color, #ddd)";
+  ta.style.border = "1px solid var(--border-color, #444)"; ta.style.borderRadius = "3px"; ta.style.resize = "vertical";
+  ta.placeholder = "Connect an Input Panel's PANEL_LINK and run to see the schema.";
+  ta.addEventListener("focus", () => ta.select());
+  el.appendChild(ta);
+
+  const copyBtn = document.createElement("button");
+  copyBtn.textContent = "Copy"; copyBtn.style.cursor = "pointer"; copyBtn.style.fontSize = "11px"; copyBtn.style.padding = "2px 8px";
+  copyBtn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); ta.select(); try { document.execCommand("copy"); copyBtn.textContent = "Copied!"; setTimeout(() => { copyBtn.textContent = "Copy"; }, 1200); } catch (err) {} });
+  el.appendChild(copyBtn);
+
+  addManagedDOMWidget(node, "__schema", el);
+  node.gen2SchemaWidget = { element: el, textarea: ta };
+}
+
+function refreshSchemaBox(node) {
+  if (!node.gen2SchemaWidget) return;
+  const entries = parseConfig(getConfigWidget(node)?.value || "[]");
+  node.gen2SchemaWidget.textarea.value = buildSchemaJsonLocal(entries);
+}
+
+// ---- Rebuild the whole panel (buttons + params + schema) ----
+function rebuildPanel(node, mode) {
+  clearManagedWidgets(node);
+  node.gen2ParamWidgets = [];
+  node.gen2ControlHandlers = [];
+
+  // Configure button (first).
+  addButtonWidget(node, "Configure", () => openConfigDialog(node, mode));
+
+  const entries = parseConfig(getConfigWidget(node)?.value || "[]");
+
+  if (mode === "input") {
+    applyInputPanelSlots(node, entries);
+    for (let i = 0; i < entries.length; i++) {
+      node.gen2ParamWidgets.push(makeParamWidget(node, i, entries[i]));
+    }
+    addButtonWidget(node, "Reset to defaults", () => {
+      for (const pw of node.gen2ParamWidgets) pw.widget.setLiveValue(pw.entry.default ?? null);
+      if (typeof node.setDirtyCanvas === "function") node.setDirtyCanvas(true, true);
+    });
+  } else {
+    applyOutputPanelSlots(node, entries);
+    addSchemaWidget(node);
+    refreshSchemaBox(node);
+  }
+
+  if (typeof node.setSize === "function") node.setSize(node.computeSize());
+  if (typeof node.setDirtyCanvas === "function") node.setDirtyCanvas(true, true);
 }
 
 // ---- Configure popup dialog ----
@@ -415,7 +398,7 @@ function openConfigDialog(node, mode) {
 
   const help = document.createElement("p");
   help.textContent = mode === "input"
-    ? "Each parameter becomes a typed output slot. Its Name is the API-export key. INT/FLOAT accept min/max/step. Default can be empty (null). IMAGE params get an upload button. Export always yields defaults, not runtime values."
+    ? "Each parameter becomes a typed output slot. Its Name is the API-export key. INT/FLOAT accept min/max/step. Default can be empty (null). IMAGE params get an upload + preview on the node. Export always yields defaults, not runtime values."
     : "Each parameter becomes a typed input slot. IMAGE inputs are saved to the output folder and their URL returned via /history.";
   help.style.opacity = "0.8"; help.style.fontSize = "12px"; help.style.margin = "0 0 12px 0";
   dlg.appendChild(help);
@@ -442,20 +425,24 @@ function openConfigDialog(node, mode) {
 
       row.appendChild(typeSel); row.appendChild(nameIn);
 
-      // Default cell
       if (mode === "input" && entry.type === "IMAGE") {
         const pickBtn = document.createElement("button");
         pickBtn.textContent = "Upload"; pickBtn.style.fontSize = "11px"; pickBtn.style.padding = "2px 8px";
         const fileInput = document.createElement("input");
         fileInput.type = "file"; fileInput.accept = "image/*"; fileInput.style.display = "none";
         pickBtn.onclick = (e) => { e.preventDefault(); fileInput.click(); };
+        const thumb = document.createElement("img");
+        thumb.style.maxWidth = "48px"; thumb.style.maxHeight = "48px"; thumb.style.objectFit = "contain";
+        thumb.style.borderRadius = "3px"; thumb.style.display = "none"; thumb.style.cursor = "pointer";
+        thumb.title = "Click to view full size";
+        thumb.onclick = (e) => { e.preventDefault(); const u = imageRefToViewUrl(entry.default); if (u) window.open(u, "_blank"); };
         const fnameLbl = document.createElement("span");
         fnameLbl.style.fontSize = "10px"; fnameLbl.style.opacity = "0.7"; fnameLbl.style.maxWidth = "70px";
         fnameLbl.style.overflow = "hidden"; fnameLbl.style.textOverflow = "ellipsis"; fnameLbl.style.whiteSpace = "nowrap";
-        function refresh() { const cur = entry.default; fnameLbl.textContent = (typeof cur === "string" && cur) ? cur.split("/").pop() : ""; fnameLbl.title = cur || ""; }
+        function refresh() { const cur = entry.default; const u = imageRefToViewUrl(cur); if (u) { thumb.src = u; thumb.style.display = "inline-block"; } else { thumb.style.display = "none"; } fnameLbl.textContent = (typeof cur === "string" && cur) ? cur.split("/").pop() : ""; fnameLbl.title = cur || ""; }
         refresh();
         fileInput.onchange = async () => { const file = fileInput.files && fileInput.files[0]; if (!file) return; pickBtn.textContent = "..."; try { const up = await uploadImage(file); entry.default = filenameFromUpload(up); refresh(); } catch (err) { fnameLbl.textContent = "failed"; } finally { pickBtn.textContent = "Upload"; } };
-        row.appendChild(pickBtn); row.appendChild(fileInput); row.appendChild(fnameLbl);
+        row.appendChild(pickBtn); row.appendChild(fileInput); row.appendChild(thumb); row.appendChild(fnameLbl);
       } else {
         const defIn = document.createElement("input");
         defIn.type = NUMERIC_TYPES.includes(entry.type) ? "number" : "text";
@@ -465,7 +452,6 @@ function openConfigDialog(node, mode) {
         row.appendChild(defIn);
       }
 
-      // Range/step for INT/FLOAT
       if (NUMERIC_TYPES.includes(entry.type)) {
         const mkNum = (key, ph) => { const inp = document.createElement("input"); inp.type = "number"; inp.value = entry[key] != null ? entry[key] : ""; inp.placeholder = ph; inp.style.width = "60px"; inp.disabled = mode === "output"; inp.oninput = () => { const v = inp.value; if (v === "") { entry[key] = null; return; } entry[key] = entry.type === "INT" ? parseInt(v, 10) : parseFloat(v); }; return inp; };
         for (const [k, label] of [["min", "min"], ["max", "max"], ["step", "step"]]) { const l = document.createElement("span"); l.textContent = label; l.style.fontSize = "10px"; l.style.opacity = "0.6"; row.appendChild(l); row.appendChild(mkNum(k, label)); }
@@ -504,9 +490,7 @@ function openConfigDialog(node, mode) {
     const seen = new Set(); const clean = [];
     for (const e of draft) { const n = (e.name || "").trim(); if (!n || seen.has(n)) continue; seen.add(n); const c = { name: n, type: e.type, default: e.default ?? null, min: e.min ?? null, max: e.max ?? null, step: e.step ?? null }; if (e.type === "INT" && e.controlMode && e.controlMode !== "fixed") c.controlMode = e.controlMode; clean.push(c); }
     setConfig(node, clean);
-    if (mode === "input") { applyInputPanelSlots(node, clean); buildParamWidgets(node, clean); }
-    else { applyOutputPanelSlots(node, clean); refreshSchemaBox(node); }
-    if (typeof node.setDirtyCanvas === "function") node.setDirtyCanvas(true, true);
+    rebuildPanel(node, mode);
     dlg.close();
   };
   btnRow.appendChild(cancelBtn); btnRow.appendChild(okBtn); dlg.appendChild(btnRow);
@@ -543,55 +527,31 @@ app.registerExtension({
     nodeType.prototype.onNodeCreated = function () {
       try { origOnNodeCreated?.apply(this, arguments); } catch (err) {}
       try {
-        ensureOverlay(this);
-        // Hide the raw _config text widget if present
+        // Hide the raw _config text widget (we drive it via the dialog).
         const cw = getConfigWidget(this);
-        if (cw) { cw.type = "hidden"; cw.computeSize = () => [0, -4]; }
-        // Defer slot/widget build until widgets exist
+        if (cw) { cw.type = "hidden"; cw.computeSize = () => [0, -4]; cw.hidden = true; }
+        // Build after widgets are populated by the framework.
         const self = this;
-        setTimeout(() => {
-          try {
-            const w = getConfigWidget(self);
-            if (w) {
-              const entries = parseConfig(w.value || "[]");
-              if (mode === "input") { applyInputPanelSlots(self, entries); buildParamWidgets(self, entries); refreshImageButtons(self); }
-              else { applyOutputPanelSlots(self, entries); refreshSchemaBox(self); }
-            }
-          } catch (err) { console.error("[gen2] deferred build error", err); }
-        }, 50);
+        setTimeout(() => { try { rebuildPanel(self, mode); } catch (err) { console.error("[gen2] rebuild error", err); } }, 0);
       } catch (err) { console.error("[gen2] onNodeCreated error", err); }
     };
 
-    // onDrawForeground: position the overlay each frame
-    const origOnDrawForeground = nodeType.prototype.onDrawForeground;
-    nodeType.prototype.onDrawForeground = function (ctx) {
-      try { origOnDrawForeground?.apply(this, arguments); } catch (err) {}
-      try {
-        if (!this.__gen2Overlay) return;
-        if (this.flags?.collapsed) { this.__gen2Overlay.style.display = "none"; return; }
-        this.__gen2Overlay.style.display = "block";
-        positionOverlay(this, ctx);
-        if (mode === "input") refreshImageButtons(this);
-      } catch (err) {}
+    // When a saved workflow is loaded, rebuild from the restored _config.
+    const origOnConfigure = nodeType.prototype.onConfigure;
+    nodeType.prototype.onConfigure = function (info) {
+      try { origOnConfigure?.apply(this, arguments); } catch (err) {}
+      const self = this;
+      setTimeout(() => { try { rebuildPanel(self, mode); } catch (err) { console.error("[gen2] onConfigure rebuild error", err); } }, 0);
     };
 
-    // Clean up overlay on removal
-    const origOnRemoved = nodeType.prototype.onRemoved;
-    nodeType.prototype.onRemoved = function () {
-      try { if (this.__gen2Overlay) { this.__gen2Overlay.remove(); this.__gen2Overlay = null; } } catch (err) {}
-      try { clearParamWidgets(this); } catch (err) {}
-      try { origOnRemoved?.apply(this, arguments); } catch (err) {}
-    };
-
-    // Output panel: update schema textbox after execution
     if (mode === "output") {
       const origOnExecuted = nodeType.prototype.onExecuted;
       nodeType.prototype.onExecuted = function (message) {
         try { origOnExecuted?.apply(this, arguments); } catch (err) {}
         try {
           const schema = message?.ui?.schema_json;
-          if (schema && this.__gen2SchemaTa) {
-            this.__gen2SchemaTa.value = Array.isArray(schema) ? schema[0] : schema;
+          if (schema && this.gen2SchemaWidget) {
+            this.gen2SchemaWidget.textarea.value = Array.isArray(schema) ? schema[0] : schema;
           }
         } catch (err) {}
       };
