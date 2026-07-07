@@ -21,7 +21,7 @@ import json
 from typing import Any
 
 MAX_PARAMS = 32
-SUPPORTED_TYPES = ("STRING", "INT", "FLOAT", "BOOLEAN", "IMAGE")
+SUPPORTED_TYPES = ("STRING", "INT", "FLOAT", "BOOLEAN", "IMAGE", "COMBO")
 NUMERIC_TYPES = ("INT", "FLOAT")
 
 
@@ -77,6 +77,16 @@ def parse_config(config_raw: Any) -> list[dict]:
                     entry["controlMode"] = cm
                 else:
                     entry["controlMode"] = "fixed"
+
+        if ptype == "COMBO":
+            opts = e.get("options")
+            if isinstance(opts, list):
+                entry["options"] = [str(o) for o in opts]
+            elif isinstance(opts, str):
+                # allow comma-separated string
+                entry["options"] = [s.strip() for s in opts.split(",") if s.strip()]
+            else:
+                entry["options"] = []
         clean.append(entry)
     return clean
 
@@ -120,5 +130,7 @@ def build_schema_json(params: list[dict]) -> str:
             entry["step"] = p.get("step")
         if p["type"] == "INT" and p.get("controlMode") and p["controlMode"] != "fixed":
             entry["controlMode"] = p["controlMode"]
+        if p["type"] == "COMBO":
+            entry["options"] = p.get("options", [])
         out.append(entry)
     return json.dumps(out, indent=2, ensure_ascii=False)

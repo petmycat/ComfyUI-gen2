@@ -102,7 +102,7 @@ def _coerce_value(value: Any, ptype: str) -> Any:
         if isinstance(value, str):
             return value.lower() in ("true", "1", "yes")
         return bool(value)
-    if ptype == "STRING":
+    if ptype in ("STRING", "COMBO"):
         return str(value) if not isinstance(value, str) else value
     return value
 
@@ -170,18 +170,14 @@ class Gen2InputPanel(io.ComfyNode):
         out: list[Any] = [panel_link]
 
         # Outputs 1..MAX_PARAMS: the parameter values in config order.
+        # Each param arrives as a kwarg keyed by its name (the frontend widget
+        # serializes its value under that name). Fall back to the config default.
         for i in range(MAX_PARAMS):
             if i < len(params):
                 p = params[i]
                 name = p["name"]
                 ptype = p["type"]
-                # The widget for each param shows the default value (so save /
-                # export yields defaults). At runtime the frontend writes the
-                # live value into a side widget named "__val_<name>"; we read
-                # that first, falling back to the default.
-                raw = kwargs.get(f"__val_{name}")
-                if raw is None:
-                    raw = kwargs.get(name, p.get("default"))
+                raw = kwargs.get(name, p.get("default"))
                 coerced = _coerce_value(raw, ptype)
                 # Range-check INT/FLOAT (interrupts workflow on violation).
                 validate_value(name, ptype, coerced, p)
