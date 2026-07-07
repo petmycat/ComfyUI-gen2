@@ -88,7 +88,7 @@ def _coerce_value(value: Any, ptype: str) -> Any:
         if isinstance(value, str):
             return _load_image_tensor(value)
         return value
-    if ptype == "INT":
+    if ptype in ("INT", "SEED"):
         try:
             return int(value)
         except (TypeError, ValueError):

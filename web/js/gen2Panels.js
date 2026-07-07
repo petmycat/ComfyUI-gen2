@@ -28,19 +28,25 @@ const NODE_TYPES = {
   Gen2_OutputPanel: { mode: "output" },
 };
 const MAX_PARAMS = 32;
-const SUPPORTED_TYPES = ["STRING", "INT", "FLOAT", "BOOLEAN", "IMAGE", "COMBO"];
-const NUMERIC_TYPES = ["INT", "FLOAT"];
+const SUPPORTED_TYPES = ["STRING", "INT", "FLOAT", "BOOLEAN", "IMAGE", "COMBO", "SEED"];
+const NUMERIC_TYPES = ["INT", "FLOAT", "SEED"];   // carry min/max/step
+const INT_TYPES = ["INT", "SEED"];                // integer precision
 const SLOT_PREFIX = "param_";
 const PANEL_LINK_NAME = "PANEL_LINK";
 
-// Slot (socket) type shown for each param type. COMBO outputs a chosen string.
+const SEED_MIN = 0;
+const SEED_MAX = 0xffffffffffffffff; // ComfyUI seed max (imprecise in JS, only used as bound)
+
+// Slot (socket) type shown for each param type. COMBO outputs a chosen option
+// string typed as COMBO so it connects to combo inputs (sampler_name, etc.).
 function slotTypeFor(ptype) {
   switch (ptype) {
     case "IMAGE": return "IMAGE";
     case "INT": return "INT";
+    case "SEED": return "INT";
     case "FLOAT": return "FLOAT";
     case "BOOLEAN": return "BOOLEAN";
-    case "COMBO": return "STRING";
+    case "COMBO": return "COMBO";
     default: return "STRING";
   }
 }
@@ -56,8 +62,7 @@ function serializeConfig(entries) {
   return JSON.stringify(entries.map((e) => {
     const o = { name: e.name || "", type: e.type || "STRING", default: e.default ?? null };
     if (NUMERIC_TYPES.includes(e.type)) { o.min = e.min ?? null; o.max = e.max ?? null; o.step = e.step ?? null; }
-    if (e.type === "INT" && e.controlMode && e.controlMode !== "fixed") o.controlMode = e.controlMode;
-    if (e.type === "COMBO") o.options = Array.isArray(e.options) ? e.options : [];
+    if (e.type === "SEED") o.controlMode = e.controlMode || "randomize";
     return o;
   }));
 }
@@ -174,18 +179,24 @@ function restoreLinks(node, mode, map) {
 }
 
 // ---- Managed widget helpers ----
+// Uses ComfyUI's node.removeWidget/ensureWidgetRemoved so DOM widgets are
+// properly unregistered from the Vue domWidget store (a manual splice leaves
+// ghost DOM widgets that break re-adding on reconfigure — the image bug).
 function clearManagedWidgets(node) {
   if (!node.widgets) return;
-  const keep = [];
-  for (const w of node.widgets) {
-    if (w.__gen2Managed) {
-      try { if (w.element && w.element.parentNode) w.element.parentNode.removeChild(w.element); } catch (e) {}
-      try { w.onRemove?.(); } catch (e) {}
-      continue;
-    }
-    keep.push(w);
+  const managed = node.widgets.filter((w) => w.__gen2Managed);
+  for (const w of managed) {
+    try {
+      if (typeof node.ensureWidgetRemoved === "function") node.ensureWidgetRemoved(w);
+      else if (typeof node.removeWidget === "function") node.removeWidget(w);
+      else {
+        try { w.onRemove?.(); } catch (e) {}
+        const idx = node.widgets.indexOf(w);
+        if (idx >= 0) node.widgets.splice(idx, 1);
+      }
+    } catch (e) { console.error("[gen2] widget remove error", e); }
+    try { if (w.element && w.element.parentNode) w.element.parentNode.removeChild(w.element); } catch (e) {}
   }
-  node.widgets = keep;
   node.gen2ParamWidgets = [];
   node.gen2ControlHandlers = [];
   node.gen2SchemaWidget = null;
@@ -216,27 +227,34 @@ function addManagedDOMWidget(node, name, element, opts) {
 function makeParamWidget(node, paramIndex, entry) {
   const t = entry.type;
 
-  if (t === "INT" || t === "FLOAT") {
-    const opts = { min: entry.min ?? undefined, max: entry.max ?? undefined, step: entry.step ?? undefined };
-    if (t === "INT") opts.precision = 0;
-    const w = node.addWidget("number", entry.name, entry.default ?? 0, () => {}, opts);
+  if (t === "INT" || t === "FLOAT" || t === "SEED") {
+    const isInt = INT_TYPES.includes(t);
+    let mn = entry.min, mx = entry.max, st = entry.step;
+    if (t === "SEED") { if (mn == null) mn = SEED_MIN; if (mx == null) mx = SEED_MAX; }
+    if (mn == null) mn = isInt ? -Number.MAX_SAFE_INTEGER : -1e12;
+    if (mx == null) mx = isInt ? Number.MAX_SAFE_INTEGER : 1e12;
+    if (st == null) st = isInt ? 1 : 0.01;
+    // step2 is the real drag/step increment; step is the legacy 10x value.
+    const opts = { min: mn, max: mx, step: st * 10, step2: st };
+    if (isInt) opts.precision = 0;
+    const dflt = entry.default != null ? entry.default : 0;
+    const w = node.addWidget("number", entry.name, dflt, () => {}, opts);
     w.__gen2Managed = true;
     const pw = { entry, paramIndex, getValue: () => w.value, setValue: (v) => { w.value = v; } };
 
-    if (t === "INT") {
-      const ctrl = node.addWidget("combo", entry.name + " · after run", entry.controlMode || "fixed",
+    // Only SEED gets control_after_generate (fixed/randomize/increment/decrement).
+    if (t === "SEED") {
+      const ctrl = node.addWidget("combo", entry.name + " · after run", entry.controlMode || "randomize",
         (v) => { entry.controlMode = v; persistConfig(node, paramIndex, entry); },
         { values: ["fixed", "randomize", "increment", "decrement"], serialize: false });
       ctrl.__gen2Managed = true;
       const applyControlMode = () => {
         const mode = ctrl.value;
         if (mode === "fixed") return;
-        let v = w.value; if (v == null || isNaN(v)) v = 0; v = parseInt(v, 10);
-        const lo = entry.min != null ? entry.min : 0;
-        const hi = entry.max != null ? entry.max : 0xffffffffffffffff;
-        if (mode === "randomize") v = Math.floor(Math.random() * (hi - lo + 1)) + lo;
-        else if (mode === "increment") { v = v + 1; if (v > hi) v = lo; }
-        else if (mode === "decrement") { v = v - 1; if (v < lo) v = hi; }
+        let v = w.value; if (v == null || isNaN(v)) v = 0; v = Math.floor(v);
+        if (mode === "randomize") { const range = Math.min(mx - mn + 1, Number.MAX_SAFE_INTEGER); v = mn + Math.floor(Math.random() * range); }
+        else if (mode === "increment") { v = v + 1; if (v > mx) v = mn; }
+        else if (mode === "decrement") { v = v - 1; if (v < mn) v = mx; }
         w.value = v;
       };
       node.gen2ControlHandlers = node.gen2ControlHandlers || [];
@@ -258,11 +276,11 @@ function makeParamWidget(node, paramIndex, entry) {
   }
 
   if (t === "COMBO") {
-    const values = Array.isArray(entry.options) && entry.options.length ? entry.options : [""];
-    const def = (entry.default != null && values.includes(entry.default)) ? entry.default : values[0];
-    const w = node.addWidget("combo", entry.name, def, () => {}, { values });
+    // COMBO = a single option string. Text widget to type the option; the output
+    // slot is typed COMBO so it connects to combo inputs (sampler_name, etc.).
+    const w = node.addWidget("text", entry.name, entry.default ?? "", () => {});
     w.__gen2Managed = true;
-    return { entry, paramIndex, getValue: () => w.value, setValue: (v) => { if (values.includes(v)) w.value = v; } };
+    return { entry, paramIndex, getValue: () => w.value, setValue: (v) => { w.value = v ?? ""; } };
   }
 
   // IMAGE: hidden value widget (serializes filename by name) + DOM upload UI.
@@ -350,8 +368,7 @@ function buildSchemaJsonLocal(entries) {
   const out = entries.map((e) => {
     const o = { name: e.name, type: e.type, default: e.default ?? null };
     if (NUMERIC_TYPES.includes(e.type)) { o.min = e.min ?? null; o.max = e.max ?? null; o.step = e.step ?? null; }
-    if (e.type === "INT" && e.controlMode && e.controlMode !== "fixed") o.controlMode = e.controlMode;
-    if (e.type === "COMBO") o.options = Array.isArray(e.options) ? e.options : [];
+    if (e.type === "SEED") o.controlMode = e.controlMode || "randomize";
     return o;
   });
   return JSON.stringify(out, null, 2);
@@ -489,36 +506,39 @@ function openConfigDialog(node, mode) {
         refresh();
         fileInput.onchange = async () => { const file = fileInput.files && fileInput.files[0]; if (!file) return; pickBtn.textContent = "..."; try { const up = await uploadImage(file); entry.default = filenameFromUpload(up); refresh(); } catch (err) { fnameLbl.textContent = "failed"; } finally { pickBtn.textContent = "Upload"; } };
         row.appendChild(pickBtn); row.appendChild(fileInput); row.appendChild(thumb); row.appendChild(fnameLbl);
+      } else if (entry.type === "BOOLEAN") {
+        const boolSel = document.createElement("select");
+        for (const bv of ["false", "true"]) { const o = document.createElement("option"); o.value = bv; o.textContent = bv; if (String(!!entry.default) === bv) o.selected = true; boolSel.appendChild(o); }
+        boolSel.style.width = "100px"; boolSel.disabled = mode === "output";
+        boolSel.onchange = () => { entry.default = boolSel.value === "true"; };
+        if (entry.default == null) entry.default = false;
+        row.appendChild(boolSel);
       } else {
         const defIn = document.createElement("input");
-        defIn.type = NUMERIC_TYPES.includes(entry.type) ? "number" : "text";
-        defIn.value = entry.default ?? ""; defIn.placeholder = "default"; defIn.style.width = "100px";
+        const isNum = NUMERIC_TYPES.includes(entry.type);
+        defIn.type = isNum ? "number" : "text";
+        defIn.value = entry.default ?? "";
+        defIn.placeholder = entry.type === "COMBO" ? "option string" : "default";
+        defIn.style.width = "110px";
         defIn.disabled = mode === "output";
-        defIn.oninput = () => { const v = defIn.value; if (v === "") { entry.default = null; return; } if (entry.type === "INT") entry.default = parseInt(v, 10); else if (entry.type === "FLOAT") entry.default = parseFloat(v); else if (entry.type === "BOOLEAN") entry.default = v.toLowerCase() === "true" || v === "1"; else entry.default = v; };
+        defIn.oninput = () => { const v = defIn.value; if (v === "") { entry.default = null; return; } if (INT_TYPES.includes(entry.type)) entry.default = parseInt(v, 10); else if (entry.type === "FLOAT") entry.default = parseFloat(v); else entry.default = v; };
         row.appendChild(defIn);
       }
 
-      // COMBO options
-      if (entry.type === "COMBO") {
-        const optIn = document.createElement("input");
-        optIn.type = "text";
-        optIn.value = Array.isArray(entry.options) ? entry.options.join(", ") : "";
-        optIn.placeholder = "options (comma separated)"; optIn.style.flexBasis = "100%"; optIn.style.minWidth = "200px";
-        optIn.disabled = mode === "output";
-        optIn.oninput = () => { entry.options = optIn.value.split(",").map((s) => s.trim()).filter((s) => s); };
-        row.appendChild(optIn);
-      }
-
-      // Range/step + after-run for numeric
+      // Range/step for numeric types (INT/FLOAT/SEED). SEED also gets after-run.
       if (NUMERIC_TYPES.includes(entry.type)) {
-        const mkNum = (key, ph) => { const inp = document.createElement("input"); inp.type = "number"; inp.value = entry[key] != null ? entry[key] : ""; inp.placeholder = ph; inp.style.width = "58px"; inp.disabled = mode === "output"; inp.oninput = () => { const v = inp.value; if (v === "") { entry[key] = null; return; } entry[key] = entry.type === "INT" ? parseInt(v, 10) : parseFloat(v); }; return inp; };
+        const mkNum = (key, ph) => { const inp = document.createElement("input"); inp.type = "number"; inp.value = entry[key] != null ? entry[key] : ""; inp.placeholder = ph; inp.style.width = "58px"; inp.disabled = mode === "output"; inp.oninput = () => { const v = inp.value; if (v === "") { entry[key] = null; return; } entry[key] = INT_TYPES.includes(entry.type) ? parseInt(v, 10) : parseFloat(v); }; return inp; };
         for (const [k, label] of [["min", "min"], ["max", "max"], ["step", "step"]]) { const l = document.createElement("span"); l.textContent = label; l.style.fontSize = "10px"; l.style.opacity = "0.6"; row.appendChild(l); row.appendChild(mkNum(k, label)); }
-        if (entry.type === "INT" && mode === "input") {
-          const l = document.createElement("span"); l.textContent = "after run"; l.style.fontSize = "10px"; l.style.opacity = "0.6";
-          const ctrlSel = document.createElement("select"); ctrlSel.style.width = "85px"; ctrlSel.style.fontSize = "11px";
-          for (const cm of ["fixed", "randomize", "increment", "decrement"]) { const o = document.createElement("option"); o.value = cm; o.textContent = cm; if ((entry.controlMode || "fixed") === cm) o.selected = true; ctrlSel.appendChild(o); }
-          ctrlSel.onchange = () => { entry.controlMode = ctrlSel.value; };
-          row.appendChild(l); row.appendChild(ctrlSel);
+        if (entry.type === "SEED") {
+          const l = document.createElement("span"); l.textContent = "min/max blank = ComfyUI seed range"; l.style.fontSize = "9px"; l.style.opacity = "0.5"; l.style.flexBasis = "100%";
+          row.appendChild(l);
+          if (mode === "input") {
+            const l2 = document.createElement("span"); l2.textContent = "after run"; l2.style.fontSize = "10px"; l2.style.opacity = "0.6";
+            const ctrlSel = document.createElement("select"); ctrlSel.style.width = "85px"; ctrlSel.style.fontSize = "11px";
+            for (const cm of ["fixed", "randomize", "increment", "decrement"]) { const o = document.createElement("option"); o.value = cm; o.textContent = cm; if ((entry.controlMode || "randomize") === cm) o.selected = true; ctrlSel.appendChild(o); }
+            ctrlSel.onchange = () => { entry.controlMode = ctrlSel.value; };
+            row.appendChild(l2); row.appendChild(ctrlSel);
+          }
         }
       }
 
@@ -552,8 +572,7 @@ function openConfigDialog(node, mode) {
       seen.add(n);
       const c = { name: n, type: e.type, default: e.default ?? null };
       if (NUMERIC_TYPES.includes(e.type)) { c.min = e.min ?? null; c.max = e.max ?? null; c.step = e.step ?? null; }
-      if (e.type === "INT" && e.controlMode && e.controlMode !== "fixed") c.controlMode = e.controlMode;
-      if (e.type === "COMBO") c.options = Array.isArray(e.options) ? e.options : [];
+      if (e.type === "SEED") c.controlMode = e.controlMode || "randomize";
       clean.push(c);
     }
     setConfig(node, clean);
