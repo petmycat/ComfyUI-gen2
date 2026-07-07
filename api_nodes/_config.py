@@ -21,8 +21,14 @@ import json
 from typing import Any
 
 MAX_PARAMS = 32
-SUPPORTED_TYPES = ("STRING", "INT", "FLOAT", "BOOLEAN", "IMAGE", "COMBO")
-NUMERIC_TYPES = ("INT", "FLOAT")
+SUPPORTED_TYPES = ("STRING", "INT", "FLOAT", "BOOLEAN", "IMAGE", "COMBO", "SEED")
+# Types that carry a numeric min/max/step. SEED is an INT with control_after_generate.
+NUMERIC_TYPES = ("INT", "FLOAT", "SEED")
+INT_TYPES = ("INT", "SEED")
+
+# ComfyUI seed convention.
+SEED_MIN = 0
+SEED_MAX = 0xffffffffffffffff
 
 
 def parse_config(config_raw: Any) -> list[dict]:
@@ -65,28 +71,20 @@ def parse_config(config_raw: Any) -> list[dict]:
                 v = e.get(k)
                 if v is not None and v != "":
                     try:
-                        entry[k] = float(v) if ptype == "FLOAT" else int(v)
+                        entry[k] = int(v) if ptype in INT_TYPES else float(v)
                     except (TypeError, ValueError):
                         entry[k] = None
                 else:
                     entry[k] = None
-            # control_after_generate: INT-only, one of fixed/randomize/increment/decrement
-            if ptype == "INT":
-                cm = str(e.get("controlMode", "fixed")).strip().lower()
-                if cm in ("fixed", "randomize", "increment", "decrement"):
-                    entry["controlMode"] = cm
-                else:
-                    entry["controlMode"] = "fixed"
+            # SEED: adopt ComfyUI seed min/max when not overridden, + control widget.
+            if ptype == "SEED":
+                if entry.get("min") is None:
+                    entry["min"] = SEED_MIN
+                if entry.get("max") is None:
+                    entry["max"] = SEED_MAX
+                cm = str(e.get("controlMode", "randomize")).strip().lower()
+                entry["controlMode"] = cm if cm in ("fixed", "randomize", "increment", "decrement") else "randomize"
 
-        if ptype == "COMBO":
-            opts = e.get("options")
-            if isinstance(opts, list):
-                entry["options"] = [str(o) for o in opts]
-            elif isinstance(opts, str):
-                # allow comma-separated string
-                entry["options"] = [s.strip() for s in opts.split(",") if s.strip()]
-            else:
-                entry["options"] = []
         clean.append(entry)
     return clean
 
@@ -128,9 +126,7 @@ def build_schema_json(params: list[dict]) -> str:
             entry["min"] = p.get("min")
             entry["max"] = p.get("max")
             entry["step"] = p.get("step")
-        if p["type"] == "INT" and p.get("controlMode") and p["controlMode"] != "fixed":
-            entry["controlMode"] = p["controlMode"]
-        if p["type"] == "COMBO":
-            entry["options"] = p.get("options", [])
+        if p["type"] == "SEED":
+            entry["controlMode"] = p.get("controlMode", "randomize")
         out.append(entry)
     return json.dumps(out, indent=2, ensure_ascii=False)

@@ -65,10 +65,8 @@ def _config_from_panel_link(panel_link: Any) -> list[dict]:
                     "max": p.get("max"),
                     "step": p.get("step"),
                 }
-                if e["type"] == "INT" and p.get("controlMode"):
+                if e["type"] == "SEED" and p.get("controlMode"):
                     e["controlMode"] = p["controlMode"]
-                if e["type"] == "COMBO":
-                    e["options"] = p.get("options", [])
                 result.append(e)
             return result
     return []
