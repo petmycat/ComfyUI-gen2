@@ -180,10 +180,18 @@ function restoreLinks(node, mode, map) {
 
 // ---- Managed widget helpers ----
 // Uses ComfyUI's node.removeWidget/ensureWidgetRemoved so DOM widgets are
-// properly unregistered from the Vue domWidget store (a manual splice leaves
-// ghost DOM widgets that break re-adding on reconfigure — the image bug).
+// properly unregistered from the Vue domWidget store. A manual splice leaves
+// ghost DOM widgets that break re-adding on reconfigure — the image bug.
+//
+// IMPORTANT: do NOT manually removeChild the element here. removeWidget() calls
+// the widget's onRemove (which unregisters from the Vue store), and Vue's
+// WidgetDOM component owns the element's parent — when the widget leaves
+// node.widgets, Vue unmounts the WidgetDOM and removes the element itself.
+// Manually removeChild races with that and leaves stale references, causing the
+// image/schema box to disappear or render in the wrong place after reconfigure.
 function clearManagedWidgets(node) {
   if (!node.widgets) return;
+  // Snapshot first — removeWidget splices node.widgets while we iterate.
   const managed = node.widgets.filter((w) => w.__gen2Managed);
   for (const w of managed) {
     try {
@@ -195,7 +203,6 @@ function clearManagedWidgets(node) {
         if (idx >= 0) node.widgets.splice(idx, 1);
       }
     } catch (e) { console.error("[gen2] widget remove error", e); }
-    try { if (w.element && w.element.parentNode) w.element.parentNode.removeChild(w.element); } catch (e) {}
   }
   node.gen2ParamWidgets = [];
   node.gen2ControlHandlers = [];
@@ -284,15 +291,19 @@ function makeParamWidget(node, paramIndex, entry) {
   }
 
   // IMAGE: hidden value widget (serializes filename by name) + DOM upload UI.
+  // The value widget is a plain object (not a BaseWidget) so it draws nothing
+  // and reports zero height; the DOM widget next to it owns the visible UI.
   let imgVal = entry.default ?? null;
   const valueWidget = {
     name: entry.name,
-    type: "gen2_image_value",
+    type: "hidden",          // hidden → computeLayoutSize returns 0 (no height)
     get value() { return imgVal; },
     set value(v) { imgVal = v; },
     serializeValue: () => imgVal,
     computeSize: () => [0, -4],
     draw: () => {},
+    options: { hideOnZoom: false },
+    y: 0,
     __gen2Managed: true,
   };
   node.widgets = node.widgets || [];
@@ -345,7 +356,9 @@ function makeParamWidget(node, paramIndex, entry) {
   el.addEventListener("dragleave", (e) => { e.preventDefault(); e.stopPropagation(); el.style.outline = "none"; });
   el.addEventListener("drop", (e) => { e.preventDefault(); e.stopPropagation(); el.style.outline = "none"; const f = e.dataTransfer?.files && e.dataTransfer.files[0]; if (f) doUpload(f); });
 
-  addManagedDOMWidget(node, "__imgui_" + entry.name, el);
+  // Reserve enough node height (DOM widgets default to 50px, which clips the
+  // preview). Height grows when an image is shown.
+  addManagedDOMWidget(node, "__imgui_" + entry.name, el, { getMinHeight: () => (imgVal ? 300 : 86) });
   updateThumb();
 
   return {
@@ -393,7 +406,7 @@ function addSchemaWidget(node) {
   copyBtn.textContent = "Copy"; copyBtn.style.cursor = "pointer"; copyBtn.style.fontSize = "11px"; copyBtn.style.padding = "2px 8px";
   copyBtn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); ta.select(); try { document.execCommand("copy"); copyBtn.textContent = "Copied!"; setTimeout(() => { copyBtn.textContent = "Copy"; }, 1200); } catch (err) {} });
   el.appendChild(copyBtn);
-  addManagedDOMWidget(node, "__schema", el);
+  addManagedDOMWidget(node, "__schema", el, { getMinHeight: () => 210 });
   node.gen2SchemaWidget = { element: el, textarea: ta };
 }
 
@@ -439,8 +452,28 @@ function rebuildPanel(node, mode) {
   }
 
   restoreLinks(node, mode, links);
-  if (typeof node.setSize === "function") node.setSize(node.computeSize());
-  if (typeof node.setDirtyCanvas === "function") node.setDirtyCanvas(true, true);
+
+  // Sizing: run once now (legacy canvas path) and again next frame (DOM widgets
+  // need a layout pass before their getMinHeight reflects the new content). We
+  // only grow width and always set height to computeSize so removed widgets
+  // actually shrink the node (the old "only grow height" left the node bloated
+  // after deleting params, which hid the image/schema below the fold).
+  const applySize = () => {
+    try {
+      if (typeof node.computeSize === "function" && typeof node.setSize === "function") {
+        const cs = node.computeSize();
+        const w = Math.max((node.size && node.size[0]) || 0, cs[0]);
+        node.setSize([w, cs[1]]);
+      }
+    } catch (e) {}
+    // Force both the legacy canvas and the Vue renderer to repaint; without
+    // this the Vue domWidget list sometimes doesn't re-render after a
+    // reconfigure (the image/schema box stays gone until the next pan/zoom).
+    try { node.setDirtyCanvas?.(true, true); } catch (e) {}
+    try { app.canvas?.setDirty?.(true, true); } catch (e) {}
+  };
+  applySize();
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(applySize);
 }
 
 // ---- Configure popup dialog ----
