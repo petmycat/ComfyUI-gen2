@@ -194,6 +194,15 @@ function clearManagedWidgets(node) {
   // Snapshot first — removeWidget splices node.widgets while we iterate.
   const managed = node.widgets.filter((w) => w.__gen2Managed);
   for (const w of managed) {
+    // Vue removes DOM elements on its next render pass. Hide the retiring
+    // element immediately so it cannot remain above the newly registered
+    // widget and intercept clicks during that short overlap window.
+    try {
+      if (w.element) {
+        w.element.style.visibility = "hidden";
+        w.element.style.pointerEvents = "none";
+      }
+    } catch (e) {}
     try {
       if (typeof node.ensureWidgetRemoved === "function") node.ensureWidgetRemoved(w);
       else if (typeof node.removeWidget === "function") node.removeWidget(w);
@@ -350,8 +359,18 @@ function makeParamWidget(node, paramIndex, entry) {
 
   const updateThumb = () => {
     const url = imageRefToViewUrl(imgVal);
-    if (url) { thumb.src = url; thumb.style.display = "block"; fnameLbl.textContent = String(imgVal).split("/").pop(); fnameLbl.title = imgVal; }
-    else { thumb.style.display = "none"; fnameLbl.textContent = "no image"; }
+    if (url) {
+      // Uploads use overwrite=true, so choosing another local image with the
+      // same filename would otherwise keep the browser's cached preview.
+      thumb.src = url + "&gen2_preview=" + Date.now();
+      thumb.style.display = "block";
+      fnameLbl.textContent = String(imgVal).split("/").pop();
+      fnameLbl.title = imgVal;
+    } else {
+      thumb.removeAttribute("src");
+      thumb.style.display = "none";
+      fnameLbl.textContent = "no image";
+    }
   };
   const doUpload = async (file) => {
     if (!file) return;
@@ -444,6 +463,54 @@ function refreshSchemaBox(node) {
   node.gen2SchemaWidget.textarea.value = buildSchemaJsonLocal(parseConfig(cfgRaw));
 }
 
+function panelRenderSignature(entries) {
+  return JSON.stringify(entries.map((e) => {
+    const signature = { name: e.name, type: e.type };
+    if (NUMERIC_TYPES.includes(e.type)) {
+      signature.min = e.min ?? null;
+      signature.max = e.max ?? null;
+      signature.step = e.step ?? null;
+    }
+    if (e.type === "SEED") signature.controlMode = e.controlMode || "randomize";
+    return signature;
+  }));
+}
+
+function refreshPanelLayout(node) {
+  const applySize = () => {
+    try {
+      if (typeof node.computeSize === "function" && typeof node.setSize === "function") {
+        const cs = node.computeSize();
+        const w = Math.max((node.size && node.size[0]) || 0, cs[0]);
+        node.setSize([w, cs[1]]);
+      }
+    } catch (e) {}
+    try { node.setDirtyCanvas?.(true, true); } catch (e) {}
+    try { app.canvas?.setDirty?.(true, true); } catch (e) {}
+  };
+  applySize();
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(applySize);
+}
+
+function updatePanelDefaultsInPlace(node, mode, entries) {
+  const current = parseConfig(getConfigWidget(node)?.value || "[]");
+  if (panelRenderSignature(current) !== panelRenderSignature(entries)) return false;
+  if (mode === "input" && (!node.gen2ParamWidgets || node.gen2ParamWidgets.length !== entries.length)) return false;
+
+  setConfig(node, entries);
+  if (mode === "input") {
+    for (let i = 0; i < entries.length; i++) {
+      const pw = node.gen2ParamWidgets[i];
+      Object.assign(pw.entry, entries[i]);
+      pw.setValue(entries[i].default);
+    }
+  } else {
+    refreshSchemaBox(node);
+  }
+  refreshPanelLayout(node);
+  return true;
+}
+
 // ---- Rebuild whole panel (buttons + params + slots + schema), preserving links ----
 function rebuildPanel(node, mode) {
   const links = captureLinks(node, mode);
@@ -468,28 +535,7 @@ function rebuildPanel(node, mode) {
   }
 
   restoreLinks(node, mode, links);
-
-  // Sizing: run once now (legacy canvas path) and again next frame (DOM widgets
-  // need a layout pass before their getMinHeight reflects the new content). We
-  // only grow width and always set height to computeSize so removed widgets
-  // actually shrink the node (the old "only grow height" left the node bloated
-  // after deleting params, which hid the image/schema below the fold).
-  const applySize = () => {
-    try {
-      if (typeof node.computeSize === "function" && typeof node.setSize === "function") {
-        const cs = node.computeSize();
-        const w = Math.max((node.size && node.size[0]) || 0, cs[0]);
-        node.setSize([w, cs[1]]);
-      }
-    } catch (e) {}
-    // Force both the legacy canvas and the Vue renderer to repaint; without
-    // this the Vue domWidget list sometimes doesn't re-render after a
-    // reconfigure (the image/schema box stays gone until the next pan/zoom).
-    try { node.setDirtyCanvas?.(true, true); } catch (e) {}
-    try { app.canvas?.setDirty?.(true, true); } catch (e) {}
-  };
-  applySize();
-  if (typeof requestAnimationFrame === "function") requestAnimationFrame(applySize);
+  refreshPanelLayout(node);
 }
 
 // ---- Configure popup dialog ----
@@ -542,9 +588,32 @@ function openConfigDialog(node, mode) {
   help.style.opacity = "0.8"; help.style.fontSize = "12px"; help.style.margin = "0 0 12px 0";
   dlg.appendChild(help);
 
+  const safetyBar = document.createElement("div");
+  safetyBar.style.display = "none";
+  safetyBar.style.padding = "8px 10px";
+  safetyBar.style.marginBottom = "10px";
+  safetyBar.style.border = "1px solid var(--error-color, #d66)";
+  safetyBar.style.borderRadius = "4px";
+  safetyBar.style.background = "var(--comfy-input-bg, #332222)";
+  safetyBar.style.color = "var(--error-color, #ffaaaa)";
+  safetyBar.style.fontSize = "12px";
+  safetyBar.setAttribute("role", "alert");
+  dlg.appendChild(safetyBar);
+
   const rowsEl = document.createElement("div");
   rowsEl.style.display = "flex"; rowsEl.style.flexDirection = "column"; rowsEl.style.gap = "8px";
   dlg.appendChild(rowsEl);
+
+  const showSafetyMessage = (messages) => {
+    if (!messages.length) {
+      safetyBar.style.display = "none";
+      safetyBar.textContent = "";
+      return;
+    }
+    safetyBar.textContent = messages.join(" ");
+    safetyBar.style.display = "block";
+    safetyBar.scrollIntoView({ block: "nearest" });
+  };
 
   function renderRows() {
     rowsEl.innerHTML = "";
@@ -577,7 +646,14 @@ function openConfigDialog(node, mode) {
         const fnameLbl = document.createElement("span");
         fnameLbl.style.fontSize = "10px"; fnameLbl.style.opacity = "0.7"; fnameLbl.style.maxWidth = "80px";
         fnameLbl.style.overflow = "hidden"; fnameLbl.style.textOverflow = "ellipsis"; fnameLbl.style.whiteSpace = "nowrap";
-        const refresh = () => { const cur = entry.default; const u = imageRefToViewUrl(cur); if (u) { thumb.src = u; thumb.style.display = "inline-block"; } else { thumb.style.display = "none"; } fnameLbl.textContent = (typeof cur === "string" && cur) ? cur.split("/").pop() : ""; fnameLbl.title = cur || ""; };
+        const refresh = () => {
+          const cur = entry.default;
+          const u = imageRefToViewUrl(cur);
+          if (u) { thumb.src = u + "&gen2_preview=" + Date.now(); thumb.style.display = "inline-block"; }
+          else { thumb.removeAttribute("src"); thumb.style.display = "none"; }
+          fnameLbl.textContent = (typeof cur === "string" && cur) ? cur.split("/").pop() : "";
+          fnameLbl.title = cur || "";
+        };
         refresh();
         fileInput.onchange = async () => { const file = fileInput.files && fileInput.files[0]; if (!file) return; pickBtn.textContent = "..."; try { const up = await uploadImage(file); entry.default = filenameFromUpload(up); refresh(); } catch (err) { fnameLbl.textContent = "failed"; } finally { pickBtn.textContent = "Upload"; } };
         row.appendChild(pickBtn); row.appendChild(fileInput); row.appendChild(thumb); row.appendChild(fnameLbl);
@@ -640,30 +716,51 @@ function openConfigDialog(node, mode) {
   let finishing = false;
   const finish = (applyChanges) => {
     if (finishing) return;
-    finishing = true;
-    cancelBtn.disabled = true;
-    okBtn.disabled = true;
 
     let clean = null;
     if (applyChanges) {
+      const errors = [];
       const seen = new Set(); clean = [];
-      for (const e of draft) {
+      for (let i = 0; i < draft.length; i++) {
+        const e = draft[i];
+        const rowLabel = `Parameter ${i + 1}`;
         const n = (e.name || "").trim();
-        if (!n || seen.has(n)) continue;
+        if (!n) {
+          errors.push(`${rowLabel} needs a name.`);
+          continue;
+        }
+        if (seen.has(n)) {
+          errors.push(`Parameter name '${n}' is duplicated.`);
+          continue;
+        }
+        if (mode === "input" && (e.default == null || (typeof e.default === "string" && e.default.trim() === ""))) {
+          errors.push(`${rowLabel} ('${n}') needs a default value.`);
+          continue;
+        }
         seen.add(n);
-        const c = { name: n, type: e.type, default: e.default ?? null };
+        const c = { name: n, type: e.type, default: e.default };
         if (NUMERIC_TYPES.includes(e.type)) { c.min = e.min ?? null; c.max = e.max ?? null; c.step = e.step ?? null; }
         if (e.type === "SEED") c.controlMode = e.controlMode || "randomize";
         clean.push(c);
       }
+      if (errors.length) {
+        showSafetyMessage(errors);
+        return;
+      }
+      showSafetyMessage([]);
     }
 
+    finishing = true;
+    cancelBtn.disabled = true;
+    okBtn.disabled = true;
     afterDialogClosed(dlg, () => {
       dlg.remove();
       releaseCanvasInteraction(node);
       if (clean) {
-        setConfig(node, clean);
-        rebuildPanel(node, mode);
+        if (!updatePanelDefaultsInPlace(node, mode, clean)) {
+          setConfig(node, clean);
+          rebuildPanel(node, mode);
+        }
       } else {
         // Cancel must not rebuild or replace working widgets. It only dismisses
         // the draft dialog and restores canvas interaction.
