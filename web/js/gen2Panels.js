@@ -209,8 +209,24 @@ function clearManagedWidgets(node) {
   node.gen2SchemaWidget = null;
 }
 
-function addButtonWidget(node, label, cb) {
-  const w = node.addWidget("button", label, "", cb, { serialize: false });
+function addButtonWidget(node, label, cb, deferUntilPointerReleased = false) {
+  const callback = deferUntilPointerReleased ? (...args) => {
+    // Older LiteGraph builds may invoke a button callback on pointerdown, while
+    // newer builds invoke it from pointerup processing. Wait until the canvas
+    // pointer is actually released before opening a native modal; otherwise the
+    // modal can steal pointerup and leave node_widget stuck.
+    const startedAt = performance.now();
+    const invokeWhenReleased = () => {
+      const pointerDown = app.canvas?.pointer?.isDown;
+      if (pointerDown && performance.now() - startedAt < 2000) {
+        requestAnimationFrame(invokeWhenReleased);
+        return;
+      }
+      window.setTimeout(() => cb(...args), 0);
+    };
+    invokeWhenReleased();
+  } : cb;
+  const w = node.addWidget("button", label, "", callback, { serialize: false });
   w.__gen2Managed = true;
   return w;
 }
@@ -435,7 +451,7 @@ function rebuildPanel(node, mode) {
   node.gen2ParamWidgets = [];
   node.gen2ControlHandlers = [];
 
-  addButtonWidget(node, "Configure", () => openConfigDialog(node, mode));
+  addButtonWidget(node, "Configure", () => openConfigDialog(node, mode), true);
 
   const entries = parseConfig(getConfigWidget(node)?.value || "[]");
   rebuildSlots(node, mode, entries);
@@ -477,7 +493,33 @@ function rebuildPanel(node, mode) {
 }
 
 // ---- Configure popup dialog ----
+function releaseCanvasInteraction(node) {
+  const canvas = app.canvas;
+  if (!canvas) return;
+
+  // Clear stale references to managed widgets before/after a native dialog.
+  // Support both the current CanvasPointer API and older LiteGraph builds.
+  if (canvas.node_widget?.[0] === node) canvas.node_widget = null;
+  try {
+    if (canvas.pointer?.reset) canvas.pointer.reset();
+    else if (canvas.pointer) canvas.pointer.isDown = false;
+  } catch (e) {}
+  try { canvas.dragging_canvas = false; } catch (e) {}
+  try { canvas.last_mouse_dragging = false; } catch (e) {}
+  try { canvas.block_click = false; } catch (e) {}
+}
+
+function afterDialogClosed(dlg, callback) {
+  dlg.addEventListener("close", () => {
+    // Let the browser finish removing the top-layer modal before mutating the
+    // node's widget list. This prevents Vue DOM-widget unmount/register races.
+    window.setTimeout(callback, 0);
+  }, { once: true });
+  dlg.close();
+}
+
 function openConfigDialog(node, mode) {
+  releaseCanvasInteraction(node);
   const entries = parseConfig(getConfigWidget(node)?.value || "[]");
   const draft = entries.map((e) => ({ ...e }));
 
@@ -595,26 +637,48 @@ function openConfigDialog(node, mode) {
 
   const btnRow = document.createElement("div");
   btnRow.style.display = "flex"; btnRow.style.gap = "8px"; btnRow.style.justifyContent = "flex-end"; btnRow.style.marginTop = "16px";
-  const cancelBtn = document.createElement("button"); cancelBtn.textContent = "Cancel"; cancelBtn.onclick = () => { dlg.close(); };
-  const okBtn = document.createElement("button"); okBtn.textContent = "Apply";
-  okBtn.onclick = () => {
-    const seen = new Set(); const clean = [];
-    for (const e of draft) {
-      const n = (e.name || "").trim();
-      if (!n || seen.has(n)) continue;
-      seen.add(n);
-      const c = { name: n, type: e.type, default: e.default ?? null };
-      if (NUMERIC_TYPES.includes(e.type)) { c.min = e.min ?? null; c.max = e.max ?? null; c.step = e.step ?? null; }
-      if (e.type === "SEED") c.controlMode = e.controlMode || "randomize";
-      clean.push(c);
+  let finishing = false;
+  const finish = (applyChanges) => {
+    if (finishing) return;
+    finishing = true;
+    cancelBtn.disabled = true;
+    okBtn.disabled = true;
+
+    let clean = null;
+    if (applyChanges) {
+      const seen = new Set(); clean = [];
+      for (const e of draft) {
+        const n = (e.name || "").trim();
+        if (!n || seen.has(n)) continue;
+        seen.add(n);
+        const c = { name: n, type: e.type, default: e.default ?? null };
+        if (NUMERIC_TYPES.includes(e.type)) { c.min = e.min ?? null; c.max = e.max ?? null; c.step = e.step ?? null; }
+        if (e.type === "SEED") c.controlMode = e.controlMode || "randomize";
+        clean.push(c);
+      }
     }
-    setConfig(node, clean);
-    rebuildPanel(node, mode);
-    dlg.close();
+
+    afterDialogClosed(dlg, () => {
+      dlg.remove();
+      releaseCanvasInteraction(node);
+      if (clean) {
+        setConfig(node, clean);
+        rebuildPanel(node, mode);
+      } else {
+        // Cancel must not rebuild or replace working widgets. It only dismisses
+        // the draft dialog and restores canvas interaction.
+        node.setDirtyCanvas?.(true, true);
+        app.canvas?.setDirty?.(true, true);
+      }
+    });
   };
+
+  const cancelBtn = document.createElement("button"); cancelBtn.textContent = "Cancel"; cancelBtn.onclick = () => finish(false);
+  const okBtn = document.createElement("button"); okBtn.textContent = "Apply"; okBtn.onclick = () => finish(true);
   btnRow.appendChild(cancelBtn); btnRow.appendChild(okBtn); dlg.appendChild(btnRow);
-  document.body.appendChild(dlg); dlg.showModal();
-  dlg.addEventListener("close", () => { dlg.remove(); });
+  document.body.appendChild(dlg);
+  dlg.addEventListener("cancel", (event) => { event.preventDefault(); finish(false); });
+  dlg.showModal();
 }
 
 // ---- Extension registration ----
