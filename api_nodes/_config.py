@@ -103,7 +103,7 @@ def parse_input_config(config_raw: Any) -> list[dict[str, Any]]:
         default = raw.get("default")
         if ptype == "SEED" and default is None:
             default = SEED_MIN
-        if default is None or (isinstance(default, str) and not default.strip()):
+        if default is None:
             raise ValueError(f"Parameter {name!r} needs a default value.")
 
         entry: dict[str, Any] = {"id": param_id, "name": name, "type": ptype, "default": default}
@@ -138,10 +138,14 @@ def parse_input_config(config_raw: Any) -> list[dict[str, Any]]:
                 if mode not in CONTROL_MODES:
                     raise ValueError(f"Parameter {name!r} has invalid after-run mode {mode!r}.")
                 entry["controlMode"] = mode
+            validate_runtime_value(entry, entry["default"])
         elif ptype == "BOOLEAN":
             if not isinstance(default, bool):
                 raise ValueError(f"Parameter {name!r} default must be true or false.")
-        elif ptype in ("STRING", "COMBO", "IMAGE"):
+        elif ptype == "STRING":
+            if not isinstance(default, str):
+                raise ValueError(f"Parameter {name!r} default must be a string.")
+        elif ptype in ("COMBO", "IMAGE"):
             if not isinstance(default, str) or not default.strip():
                 raise ValueError(f"Parameter {name!r} default must be a non-empty string.")
             entry["default"] = default.strip() if ptype == "IMAGE" else default
@@ -164,23 +168,71 @@ def parse_output_config(config_raw: Any) -> list[dict[str, str]]:
 
 def parse_config(config_raw: Any, mode: PanelMode = "input") -> list[dict[str, Any]]:
     """Backward-compatible entry point used by older integrations."""
-    return parse_input_config(config_raw) if mode == "input" else parse_output_config(config_raw)
+    if mode == "input":
+        return parse_input_config(config_raw)
+    if mode == "output":
+        return parse_output_config(config_raw)
+    raise ValueError(f"Unsupported panel mode {mode!r}.")
+
+
+def validate_runtime_value(param: dict[str, Any], value: Any) -> Any:
+    """Validate a JSON/API runtime value against one normalised Input parameter."""
+    name = param["name"]
+    ptype = param["type"]
+    if ptype in ("STRING", "COMBO"):
+        if not isinstance(value, str):
+            raise ValueError(f"Parameter {name!r} must be a string.")
+        return value
+    if ptype == "IMAGE":
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"Parameter {name!r} must be a non-empty image reference string.")
+        return value.strip()
+    if ptype == "BOOLEAN":
+        if not isinstance(value, bool):
+            raise ValueError(f"Parameter {name!r} must be true or false.")
+        return value
+    if ptype in INT_TYPES:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"Parameter {name!r} must be an integer.")
+        number: int | float = value
+    elif ptype == "FLOAT":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"Parameter {name!r} must be numeric.")
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError(f"Parameter {name!r} must be finite.")
+    else:
+        raise ValueError(f"Parameter {name!r} has unsupported type {ptype!r}.")
+
+    lo = param.get("min")
+    hi = param.get("max")
+    if lo is not None and number < lo:
+        raise ValueError(f"Parameter {name!r} = {number} is below min {lo}.")
+    if hi is not None and number > hi:
+        raise ValueError(f"Parameter {name!r} = {number} is above max {hi}.")
+    step = param.get("step")
+    if step is not None and lo is not None:
+        offset = number - lo
+        if ptype in INT_TYPES:
+            aligned = offset % step == 0
+        else:
+            quotient = offset / step
+            aligned = math.isclose(quotient, round(quotient), rel_tol=1e-9, abs_tol=1e-9)
+        if not aligned:
+            raise ValueError(f"Parameter {name!r} must align to step {step} from min {lo}.")
+    return number
 
 
 def validate_value(name: str, ptype: str, value: Any, param: dict[str, Any]) -> None:
-    if ptype not in NUMERIC_TYPES or value is None:
-        return
-    lo = param.get("min")
-    hi = param.get("max")
-    if lo is not None and value < lo:
-        raise ValueError(f"Gen2_InputPanel: parameter {name!r} = {value} is below min {lo}")
-    if hi is not None and value > hi:
-        raise ValueError(f"Gen2_InputPanel: parameter {name!r} = {value} is above max {hi}")
+    """Backward-compatible validator used by the Input Panel execute path."""
+    validate_runtime_value({**param, "name": name, "type": ptype}, value)
 
 
 def schema_entries(params: list[dict[str, Any]], mode: PanelMode = "input") -> list[dict[str, Any]]:
     if mode == "output":
         return [{"id": p["id"], "name": p["name"], "type": p["type"]} for p in params]
+    if mode != "input":
+        raise ValueError(f"Unsupported panel mode {mode!r}.")
     out: list[dict[str, Any]] = []
     for p in params:
         entry = {"id": p["id"], "name": p["name"], "type": p["type"], "default": p.get("default")}

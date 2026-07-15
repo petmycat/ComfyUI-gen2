@@ -171,7 +171,13 @@ class Gen2InputPanel(io.ComfyNode):
             ptype = p["type"]
             raw = kwargs.get(name, p.get("default"))
             coerced = _coerce_value(raw, ptype)
-            validate_value(name, ptype, coerced, p)
+            # IMAGE is validated as a JSON file reference before loading. Once
+            # loaded it is a tensor and must not be passed to the API validator.
+            if ptype == "IMAGE":
+                if isinstance(raw, str):
+                    validate_value(name, ptype, raw, p)
+            else:
+                validate_value(name, ptype, coerced, p)
             current_values[name] = raw if ptype == "IMAGE" else coerced
             runtime_values.append(coerced)
 

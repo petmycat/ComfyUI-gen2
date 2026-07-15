@@ -14,6 +14,7 @@ SEED_MAX = config.SEED_MAX
 parse_input_config = config.parse_input_config
 parse_output_config = config.parse_output_config
 schema_entries = config.schema_entries
+validate_runtime_value = config.validate_runtime_value
 
 
 class PanelConfigTests(unittest.TestCase):
@@ -63,6 +64,36 @@ class PanelConfigTests(unittest.TestCase):
             parse_output_config([{"name": "x", "type": "TENSOR"}])
         with self.assertRaisesRegex(ValueError, str(MAX_PARAMS)):
             parse_output_config([{"name": f"p{i}", "type": "STRING"} for i in range(MAX_PARAMS + 1)])
+
+    def test_allows_empty_string_default_and_rejects_misaligned_numeric_default(self):
+        params = parse_input_config([{"name": "prompt", "type": "STRING", "default": ""}])
+        self.assertEqual(params[0]["default"], "")
+        with self.assertRaisesRegex(ValueError, "step"):
+            parse_input_config([{"name": "count", "type": "INT", "default": 3, "min": 0, "max": 10, "step": 2}])
+
+    def test_runtime_validation_covers_all_types_and_step(self):
+        cases = [
+            ({"name": "text", "type": "STRING"}, ""),
+            ({"name": "combo", "type": "COMBO"}, "option"),
+            ({"name": "enabled", "type": "BOOLEAN"}, True),
+            ({"name": "image", "type": "IMAGE"}, " folder/image.png "),
+            ({"name": "count", "type": "INT", "min": 0, "max": 10, "step": 2}, 4),
+            ({"name": "strength", "type": "FLOAT", "min": 0.0, "max": 1.0, "step": 0.1}, 0.3),
+            ({"name": "seed", "type": "SEED", "min": 0, "max": SEED_MAX, "step": 1}, 12),
+        ]
+        results = [validate_runtime_value(param, value) for param, value in cases]
+        self.assertEqual(results[0], "")
+        self.assertEqual(results[3], "folder/image.png")
+        with self.assertRaisesRegex(ValueError, "step"):
+            validate_runtime_value({"name": "count", "type": "INT", "min": 0, "max": 10, "step": 2}, 3)
+        with self.assertRaisesRegex(ValueError, "true or false"):
+            validate_runtime_value({"name": "enabled", "type": "BOOLEAN"}, "false")
+
+    def test_rejects_invalid_panel_mode(self):
+        with self.assertRaisesRegex(ValueError, "mode"):
+            config.parse_config([], "invalid")
+        with self.assertRaisesRegex(ValueError, "mode"):
+            config.schema_entries([], "invalid")
 
 
 if __name__ == "__main__":
