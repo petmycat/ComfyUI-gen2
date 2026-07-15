@@ -185,7 +185,9 @@ class Gen2InputPanel(io.ComfyNode):
         out: list[Any] = [panel_link]
         for i in range(MAX_PARAMS):
             out.append(runtime_values[i] if i < len(runtime_values) else None)
-        return io.NodeOutput(*out, ui={"gen2_input_executed": True})
+        # ComfyUI's UI payload fields are list-valued. A scalar bool reaches
+        # execution result merging as a non-iterable and aborts the workflow.
+        return io.NodeOutput(*out, ui={"gen2_input_executed": [True]})
 
 
 class Gen2InputPanelExtension(ComfyExtension):

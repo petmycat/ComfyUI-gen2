@@ -138,12 +138,14 @@ class Gen2OutputPanel(io.ComfyNode):
         document_json = json.dumps(document, indent=2, ensure_ascii=False)
 
         # Keep the original fields for integrations that already read them.
+        # ComfyUI concatenates each UI field as a list across executions.
+        # Keep images flat, and wrap structured/scalar compatibility fields.
         ui_payload = {
             "images": ui_images,
-            "params": collected,
-            "schema_json": document_json,
-            "document": document,
-            "document_json": document_json,
+            "params": [collected],
+            "schema_json": [document_json],
+            "document": [document],
+            "document_json": [document_json],
         }
         return io.NodeOutput(ui=ui_payload)
 
