@@ -1,43 +1,33 @@
-"""
-Shared helpers for Gen2 Input/Output Panel nodes.
-
-The parameter config is a JSON list of dicts. Each entry:
-  {
-    "name": str,            # parameter name (output slot label + API-export key)
-    "type": "STRING"|"INT"|"FLOAT"|"BOOLEAN"|"IMAGE",
-    "default": Any|None,    # default value; null = no default
-    "min": float|None,      # INT/FLOAT only: minimum (inclusive)
-    "max": float|None,      # INT/FLOAT only: maximum (inclusive)
-    "step": float|None      # INT/FLOAT only: step for UI snapping + docs
-  }
-
-Only name and type are required; the rest are optional and only meaningful for
-the types noted above.
-"""
+"""Configuration contracts shared by the Gen2 Input and Output panels."""
 
 from __future__ import annotations
 
+import hashlib
 import json
-from typing import Any
+import math
+import re
+from typing import Any, Literal
 
 MAX_PARAMS = 32
 SUPPORTED_TYPES = ("STRING", "INT", "FLOAT", "BOOLEAN", "IMAGE", "COMBO", "SEED")
-# Types that carry a numeric min/max/step. SEED is an INT with control_after_generate.
 NUMERIC_TYPES = ("INT", "FLOAT", "SEED")
 INT_TYPES = ("INT", "SEED")
-
-# ComfyUI seed convention.
 SEED_MIN = 0
-SEED_MAX = 0xffffffffffffffff
+COMFY_SEED_MAX = 0xFFFFFFFFFFFFFFFF
+SEED_MAX = (2**53) - 1
+SEED_STEP = 1
+CONTROL_MODES = ("fixed", "randomize", "increment", "decrement")
+
+PanelMode = Literal["input", "output"]
 
 
-def parse_config(config_raw: Any) -> list[dict]:
-    """Parse a _config widget value (JSON string or list) into clean param dicts.
+def _stable_legacy_id(index: int, name: str, ptype: str) -> str:
+    token = hashlib.sha1(f"{index}:{name}:{ptype}".encode("utf-8")).hexdigest()[:12]
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", name).strip("-")[:24] or "param"
+    return f"legacy-{slug}-{token}"
 
-    Robust to None / empty / malformed input (returns []). Normalizes types,
-    fills missing optional keys with None, and coerces min/max/step to floats
-    for numeric params.
-    """
+
+def _load_entries(config_raw: Any) -> list[Any]:
     if config_raw is None:
         return []
     if isinstance(config_raw, list):
@@ -48,85 +38,159 @@ def parse_config(config_raw: Any) -> list[dict]:
             return []
         try:
             entries = json.loads(text)
-        except (json.JSONDecodeError, TypeError):
-            return []
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise ValueError("Panel configuration must be valid JSON.") from exc
     if not isinstance(entries, list):
-        return []
+        raise ValueError("Panel configuration must be a JSON array.")
+    if len(entries) > MAX_PARAMS:
+        raise ValueError(f"Panel configuration supports at most {MAX_PARAMS} parameters.")
+    return entries
 
-    clean = []
-    for e in entries:
-        if not isinstance(e, dict):
-            continue
-        name = str(e.get("name", "")).strip()
-        ptype = str(e.get("type", "STRING")).strip().upper()
-        if not name:
-            continue
-        if ptype not in SUPPORTED_TYPES:
-            ptype = "STRING"
 
-        entry: dict[str, Any] = {"name": name, "type": ptype, "default": e.get("default")}
+def _normalise_identity(entry: dict[str, Any], index: int, seen_names: set[str], seen_ids: set[str]) -> tuple[str, str, str]:
+    name = str(entry.get("name", "")).strip()
+    if not name:
+        raise ValueError(f"Parameter {index + 1} needs a name.")
+    if name in seen_names:
+        raise ValueError(f"Parameter name {name!r} is duplicated.")
 
+    ptype = str(entry.get("type", "STRING")).strip().upper()
+    if ptype not in SUPPORTED_TYPES:
+        raise ValueError(f"Parameter {name!r} has unsupported type {ptype!r}.")
+
+    param_id = str(entry.get("id", "")).strip() or _stable_legacy_id(index, name, ptype)
+    if param_id in seen_ids:
+        raise ValueError(f"Parameter id {param_id!r} is duplicated.")
+
+    seen_names.add(name)
+    seen_ids.add(param_id)
+    return param_id, name, ptype
+
+
+def _number(value: Any, *, field: str, name: str, integer: bool) -> int | float:
+    if value is None or value == "":
+        raise ValueError(f"Parameter {name!r} needs {field}.")
+    if isinstance(value, bool):
+        raise ValueError(f"Parameter {name!r} {field} must be numeric.")
+    try:
+        number = int(value) if integer else float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Parameter {name!r} {field} must be numeric.") from exc
+    if not integer and not math.isfinite(number):
+        raise ValueError(f"Parameter {name!r} {field} must be finite.")
+    if integer and isinstance(value, float) and not value.is_integer():
+        raise ValueError(f"Parameter {name!r} {field} must be an integer.")
+    if integer and isinstance(value, str):
+        try:
+            parsed = float(value)
+        except ValueError as exc:
+            raise ValueError(f"Parameter {name!r} {field} must be an integer.") from exc
+        if not parsed.is_integer() or int(parsed) != number:
+            raise ValueError(f"Parameter {name!r} {field} must be an integer.")
+    return number
+
+
+def parse_input_config(config_raw: Any) -> list[dict[str, Any]]:
+    entries = _load_entries(config_raw)
+    clean: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+    seen_ids: set[str] = set()
+
+    for index, raw in enumerate(entries):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Parameter {index + 1} must be an object.")
+        param_id, name, ptype = _normalise_identity(raw, index, seen_names, seen_ids)
+        default = raw.get("default")
+        if ptype == "SEED" and default is None:
+            default = SEED_MIN
+        if default is None or (isinstance(default, str) and not default.strip()):
+            raise ValueError(f"Parameter {name!r} needs a default value.")
+
+        entry: dict[str, Any] = {"id": param_id, "name": name, "type": ptype, "default": default}
         if ptype in NUMERIC_TYPES:
-            for k in ("min", "max", "step"):
-                v = e.get(k)
-                if v is not None and v != "":
-                    try:
-                        entry[k] = int(v) if ptype in INT_TYPES else float(v)
-                    except (TypeError, ValueError):
-                        entry[k] = None
-                else:
-                    entry[k] = None
-            # SEED: adopt ComfyUI seed min/max when not overridden, + control widget.
+            integer = ptype in INT_TYPES
+            entry["default"] = _number(default, field="default", name=name, integer=integer)
+            entry["min"] = _number(
+                raw.get("min", SEED_MIN if ptype == "SEED" else None),
+                field="min", name=name, integer=integer,
+            )
+            entry["max"] = _number(
+                raw.get("max", SEED_MAX if ptype == "SEED" else None),
+                field="max", name=name, integer=integer,
+            )
+            entry["step"] = _number(
+                raw.get("step", SEED_STEP if ptype == "SEED" else None),
+                field="step", name=name, integer=integer,
+            )
+            if entry["min"] > entry["max"]:
+                raise ValueError(f"Parameter {name!r} min must not exceed max.")
+            if not entry["min"] <= entry["default"] <= entry["max"]:
+                raise ValueError(f"Parameter {name!r} default must be between min and max.")
+            if entry["step"] <= 0:
+                raise ValueError(f"Parameter {name!r} step must be greater than 0.")
             if ptype == "SEED":
-                if entry.get("min") is None:
-                    entry["min"] = SEED_MIN
-                if entry.get("max") is None:
-                    entry["max"] = SEED_MAX
-                cm = str(e.get("controlMode", "randomize")).strip().lower()
-                entry["controlMode"] = cm if cm in ("fixed", "randomize", "increment", "decrement") else "randomize"
-
+                if entry["min"] < SEED_MIN or entry["max"] > SEED_MAX:
+                    raise ValueError(
+                        f"Parameter {name!r} seed range must be within the exact frontend range "
+                        f"{SEED_MIN}..{SEED_MAX} (ComfyUI supports up to {COMFY_SEED_MAX})."
+                    )
+                mode = str(raw.get("controlMode", "randomize")).strip().lower()
+                if mode not in CONTROL_MODES:
+                    raise ValueError(f"Parameter {name!r} has invalid after-run mode {mode!r}.")
+                entry["controlMode"] = mode
+        elif ptype == "BOOLEAN":
+            if not isinstance(default, bool):
+                raise ValueError(f"Parameter {name!r} default must be true or false.")
+        elif ptype in ("STRING", "COMBO", "IMAGE"):
+            if not isinstance(default, str) or not default.strip():
+                raise ValueError(f"Parameter {name!r} default must be a non-empty string.")
+            entry["default"] = default.strip() if ptype == "IMAGE" else default
         clean.append(entry)
     return clean
 
 
-def validate_value(name: str, ptype: str, value: Any, param: dict) -> None:
-    """Raise ValueError if value is out of the declared range for INT/FLOAT.
+def parse_output_config(config_raw: Any) -> list[dict[str, str]]:
+    entries = _load_entries(config_raw)
+    clean: list[dict[str, str]] = []
+    seen_names: set[str] = set()
+    seen_ids: set[str] = set()
+    for index, raw in enumerate(entries):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Parameter {index + 1} must be an object.")
+        param_id, name, ptype = _normalise_identity(raw, index, seen_names, seen_ids)
+        clean.append({"id": param_id, "name": name, "type": ptype})
+    return clean
 
-    Called from InputPanel.execute() so an out-of-range value interrupts the
-    workflow with a clear error message (instead of silently clamping).
-    """
+
+def parse_config(config_raw: Any, mode: PanelMode = "input") -> list[dict[str, Any]]:
+    """Backward-compatible entry point used by older integrations."""
+    return parse_input_config(config_raw) if mode == "input" else parse_output_config(config_raw)
+
+
+def validate_value(name: str, ptype: str, value: Any, param: dict[str, Any]) -> None:
     if ptype not in NUMERIC_TYPES or value is None:
         return
     lo = param.get("min")
     hi = param.get("max")
     if lo is not None and value < lo:
-        raise ValueError(
-            f"Gen2_InputPanel: parameter {name!r} = {value} is below min {lo}"
-        )
+        raise ValueError(f"Gen2_InputPanel: parameter {name!r} = {value} is below min {lo}")
     if hi is not None and value > hi:
-        raise ValueError(
-            f"Gen2_InputPanel: parameter {name!r} = {value} is above max {hi}"
-        )
+        raise ValueError(f"Gen2_InputPanel: parameter {name!r} = {value} is above max {hi}")
 
 
-def build_schema_json(params: list[dict]) -> str:
-    """Build the JSON schema string describing all parameters.
-
-    Output shape (pretty-printed for easy copy/paste):
-      [
-        {"name": "seed", "type": "INT", "default": 0, "min": 0, "max": 999, "step": 1},
-        {"name": "prompt", "type": "STRING", "default": null},
-        ...
-      ]
-    """
-    out = []
+def schema_entries(params: list[dict[str, Any]], mode: PanelMode = "input") -> list[dict[str, Any]]:
+    if mode == "output":
+        return [{"id": p["id"], "name": p["name"], "type": p["type"]} for p in params]
+    out: list[dict[str, Any]] = []
     for p in params:
-        entry = {"name": p["name"], "type": p["type"], "default": p.get("default")}
+        entry = {"id": p["id"], "name": p["name"], "type": p["type"], "default": p.get("default")}
         if p["type"] in NUMERIC_TYPES:
-            entry["min"] = p.get("min")
-            entry["max"] = p.get("max")
-            entry["step"] = p.get("step")
+            entry.update(min=p.get("min"), max=p.get("max"), step=p.get("step"))
         if p["type"] == "SEED":
             entry["controlMode"] = p.get("controlMode", "randomize")
         out.append(entry)
-    return json.dumps(out, indent=2, ensure_ascii=False)
+    return out
+
+
+def build_schema_json(params: list[dict[str, Any]], mode: PanelMode = "input") -> str:
+    return json.dumps(schema_entries(params, mode), indent=2, ensure_ascii=False)

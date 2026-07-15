@@ -36,7 +36,9 @@ const PANEL_LINK_NAME = "PANEL_LINK";
 
 const SEED_DEFAULT = 0;
 const SEED_MIN = 0;
-const SEED_MAX = 0xffffffffffffffff;
+// JavaScript Number cannot exactly represent ComfyUI's full uint64 seed range.
+// Cap interactive values at the largest exact integer instead of silently rounding.
+const SEED_MAX = Number.MAX_SAFE_INTEGER;
 const SEED_STEP = 1;
 
 function applySeedDefaults(entry, reset = false) {
@@ -63,16 +65,37 @@ function slotTypeFor(ptype) {
   }
 }
 
-// ---- Config (de)serialization ----
-function parseConfig(raw) {
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw;
-  try { const v = JSON.parse(raw); return Array.isArray(v) ? v : []; } catch (e) { return []; }
+// ---- Config and runtime state ----
+function newParamId() {
+  return globalThis.crypto?.randomUUID?.() || `gen2-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
-function serializeConfig(entries) {
+function legacyParamId(entry, index) {
+  const source = `${index}:${entry.name || ""}:${entry.type || "STRING"}`;
+  let hash = 2166136261;
+  for (let i = 0; i < source.length; i++) {
+    hash ^= source.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `legacy-${index}-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function parseConfig(raw) {
+  if (!raw) return [];
+  let entries;
+  if (Array.isArray(raw)) entries = raw;
+  else {
+    try { entries = JSON.parse(raw); } catch (e) { return []; }
+  }
+  if (!Array.isArray(entries)) return [];
+  return entries.map((entry, index) => ({ ...entry, id: entry.id || legacyParamId(entry, index) }));
+}
+
+function serializeConfig(entries, mode) {
   return JSON.stringify(entries.map((e) => {
-    const o = { name: e.name || "", type: e.type || "STRING", default: e.default ?? null };
+    const o = { id: e.id || newParamId(), name: e.name || "", type: e.type || "STRING" };
+    if (mode === "output") return o;
+    o.default = e.default ?? null;
     if (NUMERIC_TYPES.includes(e.type)) { o.min = e.min ?? null; o.max = e.max ?? null; o.step = e.step ?? null; }
     if (e.type === "SEED") o.controlMode = e.controlMode || "randomize";
     return o;
@@ -83,10 +106,66 @@ function getConfigWidget(node) {
   return node.widgets?.find((w) => w.name === "_config");
 }
 
-function setConfig(node, entries) {
+function setConfig(node, entries, mode) {
   const w = getConfigWidget(node);
-  if (w) w.value = serializeConfig(entries);
+  if (w) w.value = serializeConfig(entries, mode);
   return w;
+}
+
+function runtimeValues(node) {
+  node.properties = node.properties || {};
+  node.properties.gen2RuntimeValues = node.properties.gen2RuntimeValues || {};
+  return node.properties.gen2RuntimeValues;
+}
+
+function readRuntimeValue(node, entry) {
+  const values = runtimeValues(node);
+  return Object.prototype.hasOwnProperty.call(values, entry.id) ? values[entry.id] : entry.default;
+}
+
+function writeRuntimeValue(node, entry, value) {
+  runtimeValues(node)[entry.id] = value;
+}
+
+function pruneRuntimeValues(node, entries) {
+  const values = runtimeValues(node);
+  const valid = new Set(entries.map((entry) => entry.id));
+  for (const id of Object.keys(values)) if (!valid.has(id)) delete values[id];
+}
+
+function convertRuntimeValue(value, oldType, entry) {
+  if (value == null || oldType === entry.type) return value;
+  if (entry.type === "BOOLEAN") {
+    if (value === true || value === false) return value;
+    if (value === "true" || value === 1 || value === "1") return true;
+    if (value === "false" || value === 0 || value === "0") return false;
+    return entry.default;
+  }
+  if (NUMERIC_TYPES.includes(entry.type)) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return entry.default;
+    const converted = INT_TYPES.includes(entry.type) ? Math.trunc(number) : number;
+    if (entry.min != null && converted < entry.min) return entry.default;
+    if (entry.max != null && converted > entry.max) return entry.default;
+    return converted;
+  }
+  if (entry.type === "STRING" || entry.type === "COMBO") return String(value);
+  if (entry.type === "IMAGE") return typeof value === "string" && value ? value : entry.default;
+  return entry.default;
+}
+
+function migrateRuntimeValues(node, oldEntries, newEntries) {
+  const values = runtimeValues(node);
+  const oldById = new Map(oldEntries.map((entry) => [entry.id, entry]));
+  for (const entry of newEntries) {
+    const old = oldById.get(entry.id);
+    if (!old || !Object.prototype.hasOwnProperty.call(values, entry.id)) {
+      values[entry.id] = entry.default;
+      continue;
+    }
+    values[entry.id] = convertRuntimeValue(values[entry.id], old.type, entry);
+  }
+  pruneRuntimeValues(node, newEntries);
 }
 
 // ---- Image helpers ----
@@ -127,6 +206,7 @@ function rebuildSlots(node, mode, entries) {
       node.addOutput(SLOT_PREFIX + i, slotTypeFor(entries[i].type));
       const s = node.outputs[node.outputs.length - 1];
       s.label = entries[i].name || SLOT_PREFIX + i;
+      s.__gen2ParamId = entries[i].id;
     }
   } else {
     if (!node.inputs) node.inputs = [];
@@ -137,6 +217,7 @@ function rebuildSlots(node, mode, entries) {
       node.addInput(SLOT_PREFIX + i, slotTypeFor(entries[i].type));
       const s = node.inputs[node.inputs.length - 1];
       s.label = entries[i].name || SLOT_PREFIX + i;
+      s.__gen2ParamId = entries[i].id;
     }
   }
 }
@@ -148,7 +229,7 @@ function captureLinks(node, mode) {
   if (mode === "input") {
     for (const out of node.outputs || []) {
       if (out.name === PANEL_LINK_NAME || !out.links) continue;
-      const key = out.label || out.name;
+      const key = out.__gen2ParamId || out.label || out.name;
       for (const lid of out.links) {
         const link = node.graph.links[lid];
         if (link) (map[key] = map[key] || []).push({ target_id: link.target_id, target_slot: link.target_slot });
@@ -157,7 +238,7 @@ function captureLinks(node, mode) {
   } else {
     for (const inp of node.inputs || []) {
       if (inp.name === PANEL_LINK_NAME || inp.link == null) continue;
-      const key = inp.label || inp.name;
+      const key = inp.__gen2ParamId || inp.label || inp.name;
       const link = node.graph.links[inp.link];
       if (link) map[key] = { origin_id: link.origin_id, origin_slot: link.origin_slot };
     }
@@ -171,7 +252,7 @@ function restoreLinks(node, mode, map) {
     for (let i = 0; i < node.outputs.length; i++) {
       const out = node.outputs[i];
       if (out.name === PANEL_LINK_NAME) continue;
-      const targets = map[out.label || out.name];
+      const targets = map[out.__gen2ParamId || out.label || out.name];
       if (!targets) continue;
       for (const t of targets) {
         const tnode = node.graph.getNodeById(t.target_id);
@@ -182,7 +263,7 @@ function restoreLinks(node, mode, map) {
     for (let i = 0; i < node.inputs.length; i++) {
       const inp = node.inputs[i];
       if (inp.name === PANEL_LINK_NAME) continue;
-      const src = map[inp.label || inp.name];
+      const src = map[inp.__gen2ParamId || inp.label || inp.name];
       if (!src) continue;
       const snode = node.graph.getNodeById(src.origin_id);
       if (snode) { try { snode.connect(src.origin_slot, node, i); } catch (e) {} }
@@ -270,6 +351,8 @@ function addManagedDOMWidget(node, name, element, opts) {
 // Returns { entry, paramIndex, getValue, setValue }.
 function makeParamWidget(node, paramIndex, entry) {
   const t = entry.type;
+  const initialValue = readRuntimeValue(node, entry);
+  const remember = (value) => writeRuntimeValue(node, entry, value);
 
   if (t === "INT" || t === "FLOAT" || t === "SEED") {
     const isInt = INT_TYPES.includes(t);
@@ -281,10 +364,12 @@ function makeParamWidget(node, paramIndex, entry) {
     // step2 is the real drag/step increment; step is the legacy 10x value.
     const opts = { min: mn, max: mx, step: st * 10, step2: st };
     if (isInt) opts.precision = 0;
-    const dflt = entry.default != null ? entry.default : 0;
-    const w = node.addWidget("number", entry.name, dflt, () => {}, opts);
+    const dflt = initialValue != null ? initialValue : (entry.default != null ? entry.default : 0);
+    const w = node.addWidget("number", entry.name, dflt, (value) => remember(value), opts);
     w.__gen2Managed = true;
-    const pw = { entry, paramIndex, getValue: () => w.value, setValue: (v) => { w.value = v; } };
+    remember(w.value);
+    w.serializeValue = () => { remember(w.value); return w.value; };
+    const pw = { entry, paramIndex, getValue: () => w.value, setValue: (v) => { w.value = v; remember(v); } };
 
     // Only SEED gets control_after_generate (fixed/randomize/increment/decrement).
     if (t === "SEED") {
@@ -300,6 +385,7 @@ function makeParamWidget(node, paramIndex, entry) {
         else if (mode === "increment") { v = v + 1; if (v > mx) v = mn; }
         else if (mode === "decrement") { v = v - 1; if (v < mn) v = mx; }
         w.value = v;
+        remember(v);
       };
       node.gen2ControlHandlers = node.gen2ControlHandlers || [];
       node.gen2ControlHandlers.push(applyControlMode);
@@ -308,29 +394,26 @@ function makeParamWidget(node, paramIndex, entry) {
   }
 
   if (t === "BOOLEAN") {
-    const w = node.addWidget("toggle", entry.name, !!entry.default, () => {});
+    const w = node.addWidget("toggle", entry.name, !!initialValue, (value) => remember(!!value));
     w.__gen2Managed = true;
-    return { entry, paramIndex, getValue: () => w.value, setValue: (v) => { w.value = !!v; } };
+    remember(w.value);
+    w.serializeValue = () => { remember(!!w.value); return !!w.value; };
+    return { entry, paramIndex, getValue: () => w.value, setValue: (v) => { w.value = !!v; remember(w.value); } };
   }
 
-  if (t === "STRING") {
-    const w = node.addWidget("text", entry.name, entry.default ?? "", () => {});
+  if (t === "STRING" || t === "COMBO") {
+    const w = node.addWidget("text", entry.name, initialValue ?? "", (value) => remember(value ?? ""));
     w.__gen2Managed = true;
-    return { entry, paramIndex, getValue: () => w.value, setValue: (v) => { w.value = v ?? ""; } };
-  }
-
-  if (t === "COMBO") {
-    // COMBO = a single option string. Text widget to type the option; the output
-    // slot is typed COMBO so it connects to combo inputs (sampler_name, etc.).
-    const w = node.addWidget("text", entry.name, entry.default ?? "", () => {});
-    w.__gen2Managed = true;
-    return { entry, paramIndex, getValue: () => w.value, setValue: (v) => { w.value = v ?? ""; } };
+    remember(w.value);
+    w.serializeValue = () => { remember(w.value ?? ""); return w.value ?? ""; };
+    return { entry, paramIndex, getValue: () => w.value, setValue: (v) => { w.value = v ?? ""; remember(w.value); } };
   }
 
   // IMAGE: hidden value widget (serializes filename by name) + DOM upload UI.
   // The value widget is a plain object (not a BaseWidget) so it draws nothing
   // and reports zero height; the DOM widget next to it owns the visible UI.
-  let imgVal = entry.default ?? null;
+  let imgVal = initialValue ?? entry.default ?? null;
+  remember(imgVal);
   const valueWidget = {
     name: entry.name,
     type: "hidden",          // hidden → computeLayoutSize returns 0 (no height)
@@ -403,8 +486,7 @@ function makeParamWidget(node, paramIndex, entry) {
       const up = await uploadImage(file);
       if (disposed || generation !== uploadGeneration) return;
       imgVal = filenameFromUpload(up);
-      entry.default = imgVal;
-      persistConfig(node, paramIndex, entry);
+      remember(imgVal);
       updateThumb();
       refreshPanelLayout(node);
     } catch (err) {
@@ -422,7 +504,7 @@ function makeParamWidget(node, paramIndex, entry) {
   return {
     entry, paramIndex,
     getValue: () => imgVal,
-    setValue: (v) => { imgVal = v; entry.default = v; updateThumb(); },
+    setValue: (v) => { imgVal = v; remember(v); updateThumb(); },
   };
 }
 
@@ -431,25 +513,30 @@ function persistConfig(node, paramIndex, entry) {
   if (!w) return;
   const all = parseConfig(w.value || "[]");
   if (all[paramIndex]) all[paramIndex] = Object.assign({}, all[paramIndex], entry);
-  w.value = serializeConfig(all);
+  w.value = serializeConfig(all, "input");
 }
 
-// ---- JSON schema (output panel) ----
+// ---- Result document (output panel) ----
+function emptyResultDocument(entries) {
+  return {
+    version: 1,
+    inputs: { schema: [], latest_values: {} },
+    outputs: {
+      schema: entries.map((e) => ({ id: e.id, name: e.name, type: e.type })),
+      latest_values: {},
+    },
+  };
+}
+
 function buildSchemaJsonLocal(entries) {
-  const out = entries.map((e) => {
-    const o = { name: e.name, type: e.type, default: e.default ?? null };
-    if (NUMERIC_TYPES.includes(e.type)) { o.min = e.min ?? null; o.max = e.max ?? null; o.step = e.step ?? null; }
-    if (e.type === "SEED") o.controlMode = e.controlMode || "randomize";
-    return o;
-  });
-  return JSON.stringify(out, null, 2);
+  return JSON.stringify(emptyResultDocument(entries), null, 2);
 }
 
 function addSchemaWidget(node) {
   const el = document.createElement("div");
   el.style.display = "flex"; el.style.flexDirection = "column"; el.style.gap = "3px"; el.style.padding = "2px 0"; el.style.minHeight = "140px";
   const lbl = document.createElement("div");
-  lbl.textContent = "JSON schema"; lbl.style.fontSize = "11px"; lbl.style.opacity = "0.7";
+  lbl.textContent = "Latest input/output document"; lbl.style.fontSize = "11px"; lbl.style.opacity = "0.7";
   el.appendChild(lbl);
   const ta = document.createElement("textarea");
   ta.readOnly = true; ta.rows = 8;
@@ -462,33 +549,36 @@ function addSchemaWidget(node) {
   el.appendChild(ta);
   const copyBtn = document.createElement("button");
   copyBtn.textContent = "Copy"; copyBtn.style.cursor = "pointer"; copyBtn.style.fontSize = "11px"; copyBtn.style.padding = "2px 8px";
-  copyBtn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); ta.select(); try { document.execCommand("copy"); copyBtn.textContent = "Copied!"; setTimeout(() => { copyBtn.textContent = "Copy"; }, 1200); } catch (err) {} });
+  copyBtn.addEventListener("click", async (e) => {
+    e.preventDefault(); e.stopPropagation();
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(ta.value);
+      else { ta.select(); if (!document.execCommand("copy")) throw new Error("copy rejected"); }
+      copyBtn.textContent = "Copied!";
+    } catch (err) {
+      copyBtn.textContent = "Copy failed";
+      console.error("[gen2] copy failed", err);
+    }
+    setTimeout(() => { copyBtn.textContent = "Copy"; }, 1200);
+  });
   el.appendChild(copyBtn);
   addManagedDOMWidget(node, "__schema", el, { getMinHeight: () => 210 });
   node.gen2SchemaWidget = { element: el, textarea: ta };
 }
 
-// Prefer the config from a connected Input Panel (via PANEL_LINK); else own config.
 function refreshSchemaBox(node) {
   if (!node.gen2SchemaWidget) return;
-  let cfgRaw = getConfigWidget(node)?.value || "[]";
-  try {
-    const pin = node.inputs?.find((i) => i.name === PANEL_LINK_NAME);
-    if (pin && pin.link != null && node.graph) {
-      const link = node.graph.links[pin.link];
-      const src = link && node.graph.getNodeById(link.origin_id);
-      if (src && src.comfyClass === "Gen2_InputPanel") {
-        const scw = src.widgets?.find((w) => w.name === "_config");
-        if (scw && scw.value) cfgRaw = scw.value;
-      }
-    }
-  } catch (e) {}
-  node.gen2SchemaWidget.textarea.value = buildSchemaJsonLocal(parseConfig(cfgRaw));
+  if (node.gen2LatestDocument) {
+    node.gen2SchemaWidget.textarea.value = JSON.stringify(node.gen2LatestDocument, null, 2);
+    return;
+  }
+  const entries = parseConfig(getConfigWidget(node)?.value || "[]");
+  node.gen2SchemaWidget.textarea.value = buildSchemaJsonLocal(entries);
 }
 
 function panelRenderSignature(entries) {
   return JSON.stringify(entries.map((e) => {
-    const signature = { name: e.name, type: e.type };
+    const signature = { id: e.id, name: e.name, type: e.type };
     if (NUMERIC_TYPES.includes(e.type)) {
       signature.min = e.min ?? null;
       signature.max = e.max ?? null;
@@ -520,14 +610,11 @@ function updatePanelDefaultsInPlace(node, mode, entries) {
   if (panelRenderSignature(current) !== panelRenderSignature(entries)) return false;
   if (mode === "input" && (!node.gen2ParamWidgets || node.gen2ParamWidgets.length !== entries.length)) return false;
 
-  setConfig(node, entries);
+  setConfig(node, entries, mode);
   if (mode === "input") {
-    for (let i = 0; i < entries.length; i++) {
-      const pw = node.gen2ParamWidgets[i];
-      Object.assign(pw.entry, entries[i]);
-      pw.setValue(entries[i].default);
-    }
+    for (let i = 0; i < entries.length; i++) Object.assign(node.gen2ParamWidgets[i].entry, entries[i]);
   } else {
+    node.gen2LatestDocument = null;
     refreshSchemaBox(node);
   }
   refreshPanelLayout(node);
@@ -544,6 +631,8 @@ function rebuildPanel(node, mode) {
   addButtonWidget(node, "Configure", () => openConfigDialog(node, mode), true);
 
   const entries = parseConfig(getConfigWidget(node)?.value || "[]");
+  setConfig(node, entries, mode);
+  pruneRuntimeValues(node, entries);
   rebuildSlots(node, mode, entries);
 
   if (mode === "input") {
@@ -590,7 +679,7 @@ function afterDialogClosed(dlg, callback) {
 function openConfigDialog(node, mode) {
   releaseCanvasInteraction(node);
   const entries = parseConfig(getConfigWidget(node)?.value || "[]");
-  const draft = entries.map((e) => applySeedDefaults({ ...e }));
+  const draft = entries.map((e) => mode === "input" ? applySeedDefaults({ ...e }) : { id: e.id, name: e.name, type: e.type });
 
   const dlg = document.createElement("dialog");
   dlg.style.minWidth = "680px";
@@ -607,7 +696,7 @@ function openConfigDialog(node, mode) {
   const help = document.createElement("p");
   help.textContent = mode === "input"
     ? "Parameters keep this exact order. Name and default are required for every type; INT/FLOAT/SEED also require min, max, and step."
-    : "Parameters keep this exact order and require unique names. IMAGE inputs are saved to the output folder; a JSON schema is shown on the node.";
+    : "Parameters keep this exact order. Each output requires only a unique name and type; values come from the connected workflow slots.";
   help.style.opacity = "0.8"; help.style.fontSize = "12px"; help.style.margin = "0 0 12px 0";
   dlg.appendChild(help);
 
@@ -661,8 +750,10 @@ function openConfigDialog(node, mode) {
 
       row.appendChild(typeSel); row.appendChild(nameIn);
 
-      // Default cell
-      if (mode === "input" && entry.type === "IMAGE") {
+      // Input defaults are configuration; Output rows contain name and type only.
+      if (mode === "output") {
+        // no default/range controls
+      } else if (entry.type === "IMAGE") {
         const pickBtn = document.createElement("button");
         pickBtn.textContent = "Upload"; pickBtn.style.fontSize = "11px"; pickBtn.style.padding = "2px 8px";
         const fileInput = document.createElement("input");
@@ -726,11 +817,11 @@ function openConfigDialog(node, mode) {
       }
 
       // Range/step for numeric types (INT/FLOAT/SEED). SEED also gets after-run.
-      if (NUMERIC_TYPES.includes(entry.type)) {
+      if (mode === "input" && NUMERIC_TYPES.includes(entry.type)) {
         const mkNum = (key, ph) => { const inp = document.createElement("input"); inp.type = "number"; inp.value = entry[key] != null ? entry[key] : ""; inp.placeholder = mode === "input" ? ph + " *" : ph; inp.style.width = "62px"; inp.disabled = mode === "output"; inp.oninput = () => { const v = inp.value; entry[key] = v === "" ? null : Number(v); }; return inp; };
         for (const [k, label] of [["min", "min"], ["max", "max"], ["step", "step"]]) { const l = document.createElement("span"); l.textContent = label; l.style.fontSize = "10px"; l.style.opacity = "0.6"; row.appendChild(l); row.appendChild(mkNum(k, label)); }
         if (entry.type === "SEED") {
-          const l = document.createElement("span"); l.textContent = mode === "input" ? "ComfyUI defaults: 0 to 0xffffffffffffffff, step 1" : "SEED numeric metadata"; l.style.fontSize = "9px"; l.style.opacity = "0.5"; l.style.flexBasis = "100%";
+          const l = document.createElement("span"); l.textContent = `Exact JavaScript seed range: 0 to ${Number.MAX_SAFE_INTEGER}, step 1`; l.style.fontSize = "9px"; l.style.opacity = "0.5"; l.style.flexBasis = "100%";
           row.appendChild(l);
           if (mode === "input") {
             const l2 = document.createElement("span"); l2.textContent = "after run"; l2.style.fontSize = "10px"; l2.style.opacity = "0.6";
@@ -752,7 +843,11 @@ function openConfigDialog(node, mode) {
 
   const addBtn = document.createElement("button");
   addBtn.textContent = "+ Add parameter"; addBtn.style.marginTop = "8px";
-  addBtn.onclick = () => { if (draft.length >= MAX_PARAMS) return; draft.push({ name: "", type: "STRING", default: null }); renderRows(); updateCount(); };
+  addBtn.onclick = () => {
+    if (draft.length >= MAX_PARAMS) return;
+    draft.push(mode === "input" ? { id: newParamId(), name: "", type: "STRING", default: null } : { id: newParamId(), name: "", type: "STRING" });
+    renderRows(); updateCount();
+  };
 
   const countLabel = document.createElement("div");
   countLabel.style.fontSize = "11px"; countLabel.style.opacity = "0.6"; countLabel.style.marginTop = "4px";
@@ -808,8 +903,8 @@ function openConfigDialog(node, mode) {
             if (value == null || value === "" || !Number.isFinite(Number(value))) {
               errors.push(`${rowLabel} ('${n}') needs a valid ${field}.`);
               numericInvalid = true;
-            } else if (INT_TYPES.includes(e.type) && !Number.isInteger(Number(value))) {
-              errors.push(`${rowLabel} ('${n}') ${field} must be an integer.`);
+            } else if (INT_TYPES.includes(e.type) && !Number.isSafeInteger(Number(value))) {
+              errors.push(`${rowLabel} ('${n}') ${field} must be an exactly representable integer.`);
               numericInvalid = true;
             }
           }
@@ -849,9 +944,10 @@ function openConfigDialog(node, mode) {
           }
         }
 
-        const c = { name: n, type: e.type, default: e.default };
-        if (NUMERIC_TYPES.includes(e.type)) { c.min = e.min ?? null; c.max = e.max ?? null; c.step = e.step ?? null; }
-        if (e.type === "SEED") c.controlMode = e.controlMode || "randomize";
+        const c = { id: e.id || newParamId(), name: n, type: e.type };
+        if (mode === "input") c.default = e.default;
+        if (mode === "input" && NUMERIC_TYPES.includes(e.type)) { c.min = e.min ?? null; c.max = e.max ?? null; c.step = e.step ?? null; }
+        if (mode === "input" && e.type === "SEED") c.controlMode = e.controlMode || "randomize";
         clean.push(c);
         seen.add(n);
       }
@@ -869,8 +965,9 @@ function openConfigDialog(node, mode) {
       dlg.remove();
       releaseCanvasInteraction(node);
       if (clean) {
+        if (mode === "input") migrateRuntimeValues(node, entries, clean);
         if (!updatePanelDefaultsInPlace(node, mode, clean)) {
-          setConfig(node, clean);
+          setConfig(node, clean, mode);
           rebuildPanel(node, mode);
         }
       } else {
@@ -894,25 +991,20 @@ function openConfigDialog(node, mode) {
 app.registerExtension({
   name: "gen2.api_panels",
 
-  async setup() {
-    try {
-      if (!app.api) return;
-      app.api.addEventListener("executed", () => {
-        try {
-          const graph = app.graph; if (!graph || !graph.nodes) return;
-          for (const n of graph.nodes) {
-            if (n.comfyClass === "Gen2_InputPanel" && n.gen2ControlHandlers) {
-              for (const h of n.gen2ControlHandlers) { try { h(); } catch (err) { console.error("[gen2] control handler error", err); } }
-            }
-          }
-        } catch (err) { console.error("[gen2] executed handler error", err); }
-      });
-    } catch (err) { console.error("[gen2] setup error", err); }
-  },
+  async setup() {},
 
   async beforeRegisterNodeDef(nodeType, nodeData) {
     if (!NODE_TYPES[nodeData.name]) return;
     const mode = NODE_TYPES[nodeData.name].mode;
+
+    const scheduleRebuild = (node) => {
+      const generation = (node.__gen2RebuildGeneration || 0) + 1;
+      node.__gen2RebuildGeneration = generation;
+      setTimeout(() => {
+        if (node.__gen2RebuildGeneration !== generation) return;
+        try { rebuildPanel(node, mode); } catch (err) { console.error("[gen2] rebuild error", err); }
+      }, 0);
+    };
 
     const origOnNodeCreated = nodeType.prototype.onNodeCreated;
     nodeType.prototype.onNodeCreated = function () {
@@ -920,19 +1012,31 @@ app.registerExtension({
       try {
         const cw = getConfigWidget(this);
         if (cw) { cw.type = "hidden"; cw.computeSize = () => [0, -4]; cw.hidden = true; }
-        const self = this;
-        setTimeout(() => { try { rebuildPanel(self, mode); } catch (err) { console.error("[gen2] rebuild error", err); } }, 0);
+        scheduleRebuild(this);
       } catch (err) { console.error("[gen2] onNodeCreated error", err); }
     };
 
     const origOnConfigure = nodeType.prototype.onConfigure;
     nodeType.prototype.onConfigure = function (info) {
       try { origOnConfigure?.apply(this, arguments); } catch (err) {}
-      const self = this;
-      setTimeout(() => { try { rebuildPanel(self, mode); } catch (err) { console.error("[gen2] onConfigure rebuild error", err); } }, 0);
+      scheduleRebuild(this);
     };
 
-    // Output panel: refresh schema preview when PANEL_LINK connects/disconnects.
+    if (mode === "input") {
+      const origOnExecuted = nodeType.prototype.onExecuted;
+      nodeType.prototype.onExecuted = function (message) {
+        try { origOnExecuted?.apply(this, arguments); } catch (err) {}
+        const promptId = message?.prompt_id ?? message?.promptId ?? message?.detail?.prompt_id ?? null;
+        if (promptId != null && this.__gen2LastAdvancedPrompt === promptId) return;
+        this.__gen2LastAdvancedPrompt = promptId ?? Symbol("execution");
+        for (const handler of this.gen2ControlHandlers || []) {
+          try { handler(); } catch (err) { console.error("[gen2] control handler error", err); }
+        }
+        this.setDirtyCanvas?.(true, true);
+      };
+    }
+
+    // Output panel keeps its own slots; PANEL_LINK only enriches execution documents.
     if (mode === "output") {
       const origOnConn = nodeType.prototype.onConnectionsChange;
       nodeType.prototype.onConnectionsChange = function () {
@@ -943,9 +1047,17 @@ app.registerExtension({
       nodeType.prototype.onExecuted = function (message) {
         try { origOnExecuted?.apply(this, arguments); } catch (err) {}
         try {
-          const schema = message?.ui?.schema_json;
-          if (schema && this.gen2SchemaWidget) this.gen2SchemaWidget.textarea.value = Array.isArray(schema) ? schema[0] : schema;
-        } catch (err) {}
+          const ui = message?.ui || message?.output?.ui || message?.output || message || {};
+          let documentValue = ui.document ?? ui.document_json ?? ui.schema_json;
+          if (Array.isArray(documentValue)) documentValue = documentValue[0];
+          if (typeof documentValue === "string") documentValue = JSON.parse(documentValue);
+          if (!documentValue || typeof documentValue !== "object") return;
+          const promptId = message?.prompt_id ?? message?.promptId ?? message?.detail?.prompt_id ?? null;
+          if (promptId != null && this.__gen2LatestPromptId === promptId) return;
+          this.__gen2LatestPromptId = promptId;
+          this.gen2LatestDocument = documentValue;
+          refreshSchemaBox(this);
+        } catch (err) { console.error("[gen2] output document parse failed", err); }
       };
     }
   },
