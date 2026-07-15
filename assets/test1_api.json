@@ -1,0 +1,30 @@
+{
+  "1": {
+    "inputs": {
+      "_config": "[{\"id\":\"0c02f72d-8553-4d1b-bea2-d76ff94bf9c5\",\"name\":\"image1Url\",\"type\":\"IMAGE\",\"default\":\"ComfyUI_temp_jeomt_00001_.png\"},{\"id\":\"be08452a-a9bd-4ddb-bde0-3de8fe78331d\",\"name\":\"seed\",\"type\":\"SEED\",\"default\":0,\"min\":0,\"max\":9007199254740991,\"step\":1,\"controlMode\":\"fixed\"}]",
+      "image1Url": "ComfyUI_temp_jeomt_00001_.png",
+      "seed": 0
+    },
+    "class_type": "Gen2_InputPanel",
+    "_meta": {
+      "title": "Gen2 Input Panel"
+    }
+  },
+  "2": {
+    "inputs": {
+      "_config": "[{\"id\":\"346a659d-f003-402e-bfa1-7c2f829ed5ab\",\"name\":\"imageOutput1Url\",\"type\":\"IMAGE\"}]",
+      "PANEL_LINK": [
+        "1",
+        0
+      ],
+      "param_0": [
+        "1",
+        1
+      ]
+    },
+    "class_type": "Gen2_OutputPanel",
+    "_meta": {
+      "title": "Gen2 Output Panel"
+    }
+  }
+}

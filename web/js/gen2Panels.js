@@ -127,10 +127,28 @@ function writeRuntimeValue(node, entry, value) {
   runtimeValues(node)[entry.id] = value;
 }
 
+function runtimeControlModes(node) {
+  node.properties = node.properties || {};
+  node.properties.gen2RuntimeControlModes = node.properties.gen2RuntimeControlModes || {};
+  return node.properties.gen2RuntimeControlModes;
+}
+
+function readRuntimeControlMode(node, entry) {
+  const modes = runtimeControlModes(node);
+  return Object.prototype.hasOwnProperty.call(modes, entry.id) ? modes[entry.id] : (entry.controlMode || "randomize");
+}
+
+function writeRuntimeControlMode(node, entry, mode) {
+  runtimeControlModes(node)[entry.id] = mode;
+}
+
 function pruneRuntimeValues(node, entries) {
   const values = runtimeValues(node);
   const valid = new Set(entries.map((entry) => entry.id));
   for (const id of Object.keys(values)) if (!valid.has(id)) delete values[id];
+  const modes = runtimeControlModes(node);
+  const seedIds = new Set(entries.filter((entry) => entry.type === "SEED").map((entry) => entry.id));
+  for (const id of Object.keys(modes)) if (!seedIds.has(id)) delete modes[id];
 }
 
 function convertRuntimeValue(value, oldType, entry) {
@@ -157,13 +175,17 @@ function convertRuntimeValue(value, oldType, entry) {
 function migrateRuntimeValues(node, oldEntries, newEntries) {
   const values = runtimeValues(node);
   const oldById = new Map(oldEntries.map((entry) => [entry.id, entry]));
+  const modes = runtimeControlModes(node);
   for (const entry of newEntries) {
     const old = oldById.get(entry.id);
     if (!old || !Object.prototype.hasOwnProperty.call(values, entry.id)) {
       values[entry.id] = entry.default;
-      continue;
+    } else {
+      values[entry.id] = convertRuntimeValue(values[entry.id], old.type, entry);
     }
-    values[entry.id] = convertRuntimeValue(values[entry.id], old.type, entry);
+    if (entry.type === "SEED" && (!old || old.type !== "SEED" || !Object.prototype.hasOwnProperty.call(modes, entry.id))) {
+      modes[entry.id] = entry.controlMode || "randomize";
+    }
   }
   pruneRuntimeValues(node, newEntries);
 }
@@ -373,12 +395,14 @@ function makeParamWidget(node, paramIndex, entry) {
 
     // Only SEED gets control_after_generate (fixed/randomize/increment/decrement).
     if (t === "SEED") {
-      const ctrl = node.addWidget("combo", entry.name + " · after run", entry.controlMode || "randomize",
-        (v) => { entry.controlMode = v; persistConfig(node, paramIndex, entry); },
+      const ctrl = node.addWidget("combo", entry.name + " · after run", readRuntimeControlMode(node, entry),
+        (v) => writeRuntimeControlMode(node, entry, v),
         { values: ["fixed", "randomize", "increment", "decrement"], serialize: false });
       ctrl.__gen2Managed = true;
+      pw.controlWidget = ctrl;
       const applyControlMode = () => {
         const mode = ctrl.value;
+        writeRuntimeControlMode(node, entry, mode);
         if (mode === "fixed") return;
         let v = w.value; if (v == null || isNaN(v)) v = 0; v = Math.floor(v);
         if (mode === "randomize") { const range = Math.min(mx - mn + 1, Number.MAX_SAFE_INTEGER); v = mn + Math.floor(Math.random() * range); }
@@ -639,7 +663,14 @@ function rebuildPanel(node, mode) {
     if (mode === "input") {
       for (let i = 0; i < entries.length; i++) node.gen2ParamWidgets.push(makeParamWidget(node, i, entries[i]));
       addButtonWidget(node, "Reset to defaults", () => {
-        for (const pw of node.gen2ParamWidgets) pw.setValue(pw.entry.default ?? null);
+        for (const pw of node.gen2ParamWidgets) {
+          pw.setValue(pw.entry.default ?? null);
+          if (pw.entry.type === "SEED" && pw.controlWidget) {
+            const defaultMode = pw.entry.controlMode || "randomize";
+            pw.controlWidget.value = defaultMode;
+            writeRuntimeControlMode(node, pw.entry, defaultMode);
+          }
+        }
         if (typeof node.setDirtyCanvas === "function") node.setDirtyCanvas(true, true);
       });
     } else {
@@ -893,7 +924,9 @@ function openConfigDialog(node, mode) {
           errors.push(`Parameter name '${n}' is duplicated.`);
           continue;
         }
-        const missingDefault = e.default == null || (typeof e.default === "string" && e.default.trim() === "");
+        const missingDefault = e.default == null || (
+          e.type !== "STRING" && typeof e.default === "string" && e.default.trim() === ""
+        );
         if (mode === "input" && missingDefault && !NUMERIC_TYPES.includes(e.type)) {
           errors.push(`${rowLabel} ('${n}') needs a default value.`);
           continue;
