@@ -37,8 +37,8 @@ from typing_extensions import override
 
 from ._config import (
     MAX_PARAMS,
-    SUPPORTED_TYPES,
-    parse_config,
+    parse_input_config,
+    schema_entries,
     validate_value,
 )
 
@@ -162,30 +162,30 @@ class Gen2InputPanel(io.ComfyNode):
 
     @classmethod
     def execute(cls, _config: str = "[]", **kwargs) -> io.NodeOutput:
-        params = parse_config(_config)
+        params = parse_input_config(_config)
+        current_values: dict[str, Any] = {}
+        runtime_values: list[Any] = []
 
-        # Build the output tuple. Output 0 = PANEL_LINK carries the config so the
-        # OutputPanel can discover parameter names/types/ranges without its own copy.
-        panel_link = {"params": params}
+        for p in params:
+            name = p["name"]
+            ptype = p["type"]
+            raw = kwargs.get(name, p.get("default"))
+            coerced = _coerce_value(raw, ptype)
+            validate_value(name, ptype, coerced, p)
+            current_values[name] = raw if ptype == "IMAGE" else coerced
+            runtime_values.append(coerced)
+
+        panel_link = {
+            "version": 1,
+            "inputs": {
+                "schema": schema_entries(params, "input"),
+                "latest_values": current_values,
+            },
+        }
         out: list[Any] = [panel_link]
-
-        # Outputs 1..MAX_PARAMS: the parameter values in config order.
-        # Each param arrives as a kwarg keyed by its name (the frontend widget
-        # serializes its value under that name). Fall back to the config default.
         for i in range(MAX_PARAMS):
-            if i < len(params):
-                p = params[i]
-                name = p["name"]
-                ptype = p["type"]
-                raw = kwargs.get(name, p.get("default"))
-                coerced = _coerce_value(raw, ptype)
-                # Range-check INT/FLOAT (interrupts workflow on violation).
-                validate_value(name, ptype, coerced, p)
-                out.append(coerced)
-            else:
-                out.append(None)
-
-        return io.NodeOutput(*out)
+            out.append(runtime_values[i] if i < len(runtime_values) else None)
+        return io.NodeOutput(*out, ui={"gen2_input_executed": True})
 
 
 class Gen2InputPanelExtension(ComfyExtension):

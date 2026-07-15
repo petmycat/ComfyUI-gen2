@@ -1,23 +1,8 @@
-"""
-Gen2 OutputPanel - the companion to Gen2 InputPanel.
-
-It collects a workflow's outputs into one node so an external frontend driving
-ComfyUI via the API can read results from a single place (the /history
-response). Click "Configure" in the ComfyUI frontend to define N named inputs
-(type + name); each name is the API-export key. Wire the paired InputPanel's
-PANEL_LINK output into this node's PANEL_LINK input to bind the pair and let
-the output side inherit the input side's config.
-
-IMAGE inputs are saved to the ComfyUI output folder (like SaveImage) and their
-filenames/URLs are returned via the node's UI payload.
-
-A JSON schema string describing all parameters (names, types, defaults, ranges,
-steps) is also returned in the UI payload, so the frontend can display it in a
-copyable read-only textbox on the node body.
-"""
+"""Gen2 Output Panel: collect named workflow results and publish one document."""
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any
 
@@ -26,83 +11,72 @@ import torch
 from PIL import Image
 
 import folder_paths
-from comfy_api.latest import io
-from comfy_api.latest import ComfyExtension
+from comfy_api.latest import ComfyExtension, io
 from typing_extensions import override
 
-from ._config import (
-    MAX_PARAMS,
-    SUPPORTED_TYPES,
-    parse_config,
-    build_schema_json,
-)
+from ._config import MAX_PARAMS, parse_output_config, schema_entries
 
 
 def _build_param_inputs() -> list[io.Input]:
-    """Build the fixed bank of wildcard inputs: PANEL_LINK + MAX_PARAMS *."""
     inputs: list[io.Input] = [
-        io.AnyType.Input("PANEL_LINK", display_name="panel_link", tooltip="Connect from a Gen2 Input Panel's PANEL_LINK output.")
+        io.AnyType.Input(
+            "PANEL_LINK",
+            display_name="panel_link",
+            tooltip="Connect from a Gen2 Input Panel to include input schema and latest values.",
+        )
     ]
     for i in range(MAX_PARAMS):
         inputs.append(io.AnyType.Input(f"param_{i}", display_name=f"param_{i}", optional=True))
     return inputs
 
 
-def _config_from_panel_link(panel_link: Any) -> list[dict]:
-    """If PANEL_LINK carries the InputPanel's config, inherit it (full params)."""
-    if isinstance(panel_link, dict) and "params" in panel_link:
-        inherited = panel_link["params"]
-        if isinstance(inherited, list):
-            result = []
-            for p in inherited:
-                if not isinstance(p, dict) or not p.get("name"):
-                    continue
-                e = {
-                    "name": str(p.get("name", "")),
-                    "type": str(p.get("type", "STRING")).upper(),
-                    "default": p.get("default"),
-                    "min": p.get("min"),
-                    "max": p.get("max"),
-                    "step": p.get("step"),
-                }
-                if e["type"] == "SEED" and p.get("controlMode"):
-                    e["controlMode"] = p["controlMode"]
-                result.append(e)
-            return result
-    return []
+def _input_document_from_panel_link(panel_link: Any) -> dict[str, Any]:
+    empty = {"schema": [], "latest_values": {}}
+    if not isinstance(panel_link, dict):
+        return empty
+
+    inputs = panel_link.get("inputs")
+    if isinstance(inputs, dict):
+        schema = inputs.get("schema") if isinstance(inputs.get("schema"), list) else []
+        values = inputs.get("latest_values") if isinstance(inputs.get("latest_values"), dict) else {}
+        return {"schema": schema, "latest_values": values}
+
+    # Legacy PANEL_LINK carried only {"params": [...]}.
+    params = panel_link.get("params")
+    if isinstance(params, list):
+        return {"schema": params, "latest_values": {}}
+    return empty
 
 
-def _save_image(image: torch.Tensor, filename_prefix: str = "Gen2OutputPanel") -> dict:
-    """Save a single IMAGE tensor (B,H,W,C float32 in [0,1]) to the output dir.
-
-    Mirrors core SaveImage.save_images but for one image at a time. Returns the
-    {filename, subfolder, type} dict that the frontend turns into a view URL.
-    """
+def _save_images(image: torch.Tensor, filename_prefix: str) -> list[dict[str, str]]:
     output_dir = folder_paths.get_output_directory()
     full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
         filename_prefix, output_dir, int(image.shape[2]), int(image.shape[1])
     )
-    results = []
-    for batch_number, img in enumerate(image):
-        i = 255.0 * img.cpu().numpy()
-        pil = Image.fromarray(np.clip(i, 0, 255).astype(np.uint8))
+    results: list[dict[str, str]] = []
+    for img in image:
+        pixels = 255.0 * img.cpu().numpy()
+        pil = Image.fromarray(np.clip(pixels, 0, 255).astype(np.uint8))
         file = f"{filename}_{counter:05}_.png"
         pil.save(os.path.join(full_output_folder, file), compress_level=4)
         results.append({"filename": file, "subfolder": subfolder, "type": "output"})
         counter += 1
-    return results[0] if results else {}
+    return results
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    raise ValueError(f"Gen2_OutputPanel cannot document value of type {type(value).__name__}.")
 
 
 class Gen2OutputPanel(io.ComfyNode):
-    """Configurable output collection panel.
-
-    Click "Configure" in the ComfyUI frontend to define named inputs. Wire the
-    paired Gen2 Input Panel's PANEL_LINK output into this node's PANEL_LINK
-    input. IMAGE inputs are saved to the output folder and their URLs returned
-    via /history; other types are passed through as-is. A JSON schema of the
-    parameter definitions is shown in a copyable textbox on the node.
-    """
-
     class ConfigValues(dict):
         pass
 
@@ -113,16 +87,10 @@ class Gen2OutputPanel(io.ComfyNode):
             display_name="Gen2 Output Panel",
             category="Gen2/API",
             description=(
-                "Collects a workflow's outputs into one node. Click Configure "
-                "to define named inputs. IMAGE inputs are saved to the output "
-                "folder and their URLs returned via /history. Wire a Gen2 Input "
-                "Panel's PANEL_LINK output into this node's PANEL_LINK input. "
-                "A JSON schema of the parameter definitions is shown on the node."
+                "Collect named workflow outputs. Configure each output with a name and type. "
+                "PANEL_LINK adds the paired Input Panel schema and latest values to the result document."
             ),
-            inputs=[
-                io.String.Input("_config", default="[]", multiline=False),
-                *_build_param_inputs(),
-            ],
+            inputs=[io.String.Input("_config", default="[]", multiline=False), *_build_param_inputs()],
             outputs=[],
             hidden=[io.Hidden.unique_id, io.Hidden.prompt, io.Hidden.extra_pnginfo],
             is_output_node=True,
@@ -132,43 +100,51 @@ class Gen2OutputPanel(io.ComfyNode):
 
     @classmethod
     def validate_inputs(cls, _config: str = "[]", **kwargs) -> bool:
+        parse_output_config(_config)
         return True
 
     @classmethod
     def execute(cls, _config: str = "[]", **kwargs) -> io.NodeOutput:
-        # Prefer config inherited from the InputPanel via PANEL_LINK (full param
-        # defs including ranges/steps); fall back to this node's own _config.
-        panel_link = kwargs.get("PANEL_LINK")
-        params = _config_from_panel_link(panel_link)
-        if not params:
-            params = parse_config(_config)
-
-        ui_images: list[dict] = []
+        output_params = parse_output_config(_config)
+        input_document = _input_document_from_panel_link(kwargs.get("PANEL_LINK"))
+        ui_images: list[dict[str, Any]] = []
         collected: dict[str, Any] = {}
 
-        for i, p in enumerate(params[:MAX_PARAMS]):
-            name = p["name"]
-            ptype = p["type"]
-            # Param values arrive via the wildcard inputs param_0..param_31, but
-            # with accept_all_inputs they may also surface as kwargs keyed by the
-            # frontend-visible name. Prefer the wildcard slot, then the name.
-            val = kwargs.get(f"param_{i}")
-            if val is None:
-                val = kwargs.get(name)
+        for i, param in enumerate(output_params):
+            name = param["name"]
+            ptype = param["type"]
+            slot_name = f"param_{i}"
+            val = kwargs[slot_name] if slot_name in kwargs else kwargs.get(name)
 
-            if ptype == "IMAGE" and isinstance(val, torch.Tensor):
-                saved = _save_image(val, filename_prefix=f"Gen2OutputPanel_{name}")
-                if saved:
-                    ui_images.append({"name": name, **saved})
-                    collected[name] = saved
+            if ptype == "IMAGE":
+                if val is None:
+                    collected[name] = None
+                    continue
+                if not isinstance(val, torch.Tensor):
+                    raise ValueError(f"Gen2_OutputPanel output {name!r} expects an IMAGE tensor.")
+                saved = _save_images(val, filename_prefix=f"Gen2OutputPanel_{name}")
+                collected[name] = saved
+                ui_images.extend({"name": name, **image_ref} for image_ref in saved)
                 continue
 
-            collected[name] = val
+            collected[name] = _json_safe(val)
 
-        # JSON schema string for the frontend textbox (from the full param defs).
-        schema_json = build_schema_json(params)
+        output_schema = schema_entries(output_params, "output")
+        document = {
+            "version": 1,
+            "inputs": input_document,
+            "outputs": {"schema": output_schema, "latest_values": collected},
+        }
+        document_json = json.dumps(document, indent=2, ensure_ascii=False)
 
-        ui_payload = {"images": ui_images, "params": collected, "schema_json": schema_json}
+        # Keep the original fields for integrations that already read them.
+        ui_payload = {
+            "images": ui_images,
+            "params": collected,
+            "schema_json": document_json,
+            "document": document,
+            "document_json": document_json,
+        }
         return io.NodeOutput(ui=ui_payload)
 
 
