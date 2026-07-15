@@ -544,7 +544,7 @@ function addSchemaWidget(node) {
   ta.style.fontSize = "11px"; ta.style.fontFamily = "monospace";
   ta.style.background = "var(--comfy-input-bg, #1a1a1a)"; ta.style.color = "var(--fg-color, #ddd)";
   ta.style.border = "1px solid var(--border-color, #444)"; ta.style.borderRadius = "3px"; ta.style.resize = "vertical";
-  ta.placeholder = "Connect an Input Panel's PANEL_LINK (or configure this node) to see the schema.";
+  ta.placeholder = "Run the workflow to display the latest input/output JSON.";
   ta.addEventListener("focus", () => ta.select());
   el.appendChild(ta);
   const copyBtn = document.createElement("button");
@@ -568,12 +568,9 @@ function addSchemaWidget(node) {
 
 function refreshSchemaBox(node) {
   if (!node.gen2SchemaWidget) return;
-  if (node.gen2LatestDocument) {
-    node.gen2SchemaWidget.textarea.value = JSON.stringify(node.gen2LatestDocument, null, 2);
-    return;
-  }
-  const entries = parseConfig(getConfigWidget(node)?.value || "[]");
-  node.gen2SchemaWidget.textarea.value = buildSchemaJsonLocal(entries);
+  node.gen2SchemaWidget.textarea.value = node.gen2LatestDocument
+    ? JSON.stringify(node.gen2LatestDocument, null, 2)
+    : "";
 }
 
 function panelRenderSignature(entries) {
@@ -623,31 +620,42 @@ function updatePanelDefaultsInPlace(node, mode, entries) {
 
 // ---- Rebuild whole panel (buttons + params + slots + schema), preserving links ----
 function rebuildPanel(node, mode) {
+  const generation = (node.__gen2WidgetGeneration || 0) + 1;
+  node.__gen2WidgetGeneration = generation;
   const links = captureLinks(node, mode);
   clearManagedWidgets(node);
-  node.gen2ParamWidgets = [];
-  node.gen2ControlHandlers = [];
 
-  addButtonWidget(node, "Configure", () => openConfigDialog(node, mode), true);
+  const build = () => {
+    if (node.__gen2WidgetGeneration !== generation) return;
+    node.gen2ParamWidgets = [];
+    node.gen2ControlHandlers = [];
+    addButtonWidget(node, "Configure", () => openConfigDialog(node, mode), true);
 
-  const entries = parseConfig(getConfigWidget(node)?.value || "[]");
-  setConfig(node, entries, mode);
-  pruneRuntimeValues(node, entries);
-  rebuildSlots(node, mode, entries);
+    const entries = parseConfig(getConfigWidget(node)?.value || "[]");
+    setConfig(node, entries, mode);
+    pruneRuntimeValues(node, entries);
+    rebuildSlots(node, mode, entries);
 
-  if (mode === "input") {
-    for (let i = 0; i < entries.length; i++) node.gen2ParamWidgets.push(makeParamWidget(node, i, entries[i]));
-    addButtonWidget(node, "Reset to defaults", () => {
-      for (const pw of node.gen2ParamWidgets) pw.setValue(pw.entry.default ?? null);
-      if (typeof node.setDirtyCanvas === "function") node.setDirtyCanvas(true, true);
-    });
-  } else {
-    addSchemaWidget(node);
-    refreshSchemaBox(node);
-  }
+    if (mode === "input") {
+      for (let i = 0; i < entries.length; i++) node.gen2ParamWidgets.push(makeParamWidget(node, i, entries[i]));
+      addButtonWidget(node, "Reset to defaults", () => {
+        for (const pw of node.gen2ParamWidgets) pw.setValue(pw.entry.default ?? null);
+        if (typeof node.setDirtyCanvas === "function") node.setDirtyCanvas(true, true);
+      });
+    } else {
+      addSchemaWidget(node);
+      refreshSchemaBox(node);
+    }
 
-  restoreLinks(node, mode, links);
-  refreshPanelLayout(node);
+    restoreLinks(node, mode, links);
+    refreshPanelLayout(node);
+  };
+
+  // Vue owns DOM-widget unmounting. Re-registering an IMAGE preview in the same
+  // render turn can let the retiring component remove the new element. Wait for
+  // one completed paint before rebuilding the managed widgets.
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(() => requestAnimationFrame(build));
+  else window.setTimeout(build, 0);
 }
 
 // ---- Configure popup dialog ----
@@ -1049,7 +1057,7 @@ app.registerExtension({
         try {
           const ui = message?.ui || message?.output?.ui || message?.output || message || {};
           let documentValue = ui.document ?? ui.document_json ?? ui.schema_json;
-          if (Array.isArray(documentValue)) documentValue = documentValue[0];
+          if (Array.isArray(documentValue)) documentValue = documentValue.at(-1);
           if (typeof documentValue === "string") documentValue = JSON.parse(documentValue);
           if (!documentValue || typeof documentValue !== "object") return;
           const promptId = message?.prompt_id ?? message?.promptId ?? message?.detail?.prompt_id ?? null;
