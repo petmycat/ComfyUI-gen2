@@ -34,8 +34,20 @@ const INT_TYPES = ["INT", "SEED"];                // integer precision
 const SLOT_PREFIX = "param_";
 const PANEL_LINK_NAME = "PANEL_LINK";
 
+const SEED_DEFAULT = 0;
 const SEED_MIN = 0;
-const SEED_MAX = 0xffffffffffffffff; // ComfyUI seed max (imprecise in JS, only used as bound)
+const SEED_MAX = 0xffffffffffffffff;
+const SEED_STEP = 1;
+
+function applySeedDefaults(entry, reset = false) {
+  if (entry.type !== "SEED") return entry;
+  if (reset || entry.default == null) entry.default = SEED_DEFAULT;
+  if (reset || entry.min == null) entry.min = SEED_MIN;
+  if (reset || entry.max == null) entry.max = SEED_MAX;
+  if (reset || entry.step == null) entry.step = SEED_STEP;
+  if (reset || !entry.controlMode) entry.controlMode = "randomize";
+  return entry;
+}
 
 // Slot (socket) type shown for each param type. COMBO outputs a chosen option
 // string typed as COMBO so it connects to combo inputs (sampler_name, etc.).
@@ -334,23 +346,37 @@ function makeParamWidget(node, paramIndex, entry) {
   node.widgets = node.widgets || [];
   node.widgets.push(valueWidget);
 
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = "image/*";
+  fileInput.style.display = "none";
+  // Keep the native picker outside the DOM widget renderer. The standard canvas
+  // button remains interactive even when the frontend deactivates DOM widgets.
+  document.body.appendChild(fileInput);
+
+  let disposed = false;
+  let uploadGeneration = 0;
+  const uploadWidget = addButtonWidget(node, "Choose / Upload · " + entry.name, () => fileInput.click(), true);
+  const removeUploadWidget = uploadWidget.onRemove?.bind(uploadWidget);
+  uploadWidget.onRemove = () => {
+    disposed = true;
+    try { fileInput.remove(); } catch (e) {}
+    removeUploadWidget?.();
+  };
+
   const el = document.createElement("div");
-  el.style.display = "flex"; el.style.flexDirection = "column"; el.style.gap = "4px"; el.style.padding = "2px 0";
+  el.style.display = "flex";
+  el.style.flexDirection = "column";
+  el.style.gap = "4px";
+  el.style.padding = "2px 0";
+  // Preview only; interaction is handled by the standard LiteGraph button.
+  el.style.pointerEvents = "none";
   const lbl = document.createElement("div");
   lbl.textContent = entry.name; lbl.style.fontSize = "11px"; lbl.style.opacity = "0.85";
   el.appendChild(lbl);
-  const btn = document.createElement("button");
-  btn.textContent = "Choose / Upload image";
-  btn.style.cursor = "pointer"; btn.style.padding = "4px 8px"; btn.style.fontSize = "12px"; btn.style.borderRadius = "4px";
-  btn.style.background = "var(--comfy-input-bg, #333)"; btn.style.color = "var(--fg-color, #fff)"; btn.style.border = "1px solid var(--border-color, #555)";
-  el.appendChild(btn);
-  const fileInput = document.createElement("input");
-  fileInput.type = "file"; fileInput.accept = "image/*"; fileInput.style.display = "none";
-  el.appendChild(fileInput);
   const thumb = document.createElement("img");
   thumb.style.display = "none"; thumb.style.maxWidth = "100%"; thumb.style.maxHeight = "180px";
-  thumb.style.objectFit = "contain"; thumb.style.borderRadius = "3px"; thumb.style.cursor = "pointer";
-  thumb.title = "Click to view full size";
+  thumb.style.objectFit = "contain"; thumb.style.borderRadius = "3px";
   el.appendChild(thumb);
   const fnameLbl = document.createElement("div");
   fnameLbl.style.fontSize = "10px"; fnameLbl.style.opacity = "0.65";
@@ -360,8 +386,6 @@ function makeParamWidget(node, paramIndex, entry) {
   const updateThumb = () => {
     const url = imageRefToViewUrl(imgVal);
     if (url) {
-      // Uploads use overwrite=true, so choosing another local image with the
-      // same filename would otherwise keep the browser's cached preview.
       thumb.src = url + "&gen2_preview=" + Date.now();
       thumb.style.display = "block";
       fnameLbl.textContent = String(imgVal).split("/").pop();
@@ -374,26 +398,25 @@ function makeParamWidget(node, paramIndex, entry) {
   };
   const doUpload = async (file) => {
     if (!file) return;
-    btn.textContent = "Uploading...";
+    const generation = ++uploadGeneration;
     try {
       const up = await uploadImage(file);
+      if (disposed || generation !== uploadGeneration) return;
       imgVal = filenameFromUpload(up);
       entry.default = imgVal;
       persistConfig(node, paramIndex, entry);
       updateThumb();
-    } catch (err) { console.error("[gen2] upload failed", err); }
-    btn.textContent = "Choose / Upload image";
+      refreshPanelLayout(node);
+    } catch (err) {
+      console.error("[gen2] upload failed", err);
+    } finally {
+      fileInput.value = "";
+      node.setDirtyCanvas?.(true, true);
+    }
   };
   fileInput.addEventListener("change", () => doUpload(fileInput.files && fileInput.files[0]));
-  btn.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); fileInput.click(); });
-  thumb.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); const u = imageRefToViewUrl(imgVal); if (u) window.open(u, "_blank"); });
-  el.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); el.style.outline = "2px solid var(--p-primary-color, #4af)"; });
-  el.addEventListener("dragleave", (e) => { e.preventDefault(); e.stopPropagation(); el.style.outline = "none"; });
-  el.addEventListener("drop", (e) => { e.preventDefault(); e.stopPropagation(); el.style.outline = "none"; const f = e.dataTransfer?.files && e.dataTransfer.files[0]; if (f) doUpload(f); });
 
-  // Reserve enough node height (DOM widgets default to 50px, which clips the
-  // preview). Height grows when an image is shown.
-  addManagedDOMWidget(node, "__imgui_" + entry.name, el, { getMinHeight: () => (imgVal ? 300 : 86) });
+  addManagedDOMWidget(node, "__imgui_" + entry.name, el, { getMinHeight: () => (imgVal ? 240 : 48), margin: 0 });
   updateThumb();
 
   return {
@@ -567,7 +590,7 @@ function afterDialogClosed(dlg, callback) {
 function openConfigDialog(node, mode) {
   releaseCanvasInteraction(node);
   const entries = parseConfig(getConfigWidget(node)?.value || "[]");
-  const draft = entries.map((e) => ({ ...e }));
+  const draft = entries.map((e) => applySeedDefaults({ ...e }));
 
   const dlg = document.createElement("dialog");
   dlg.style.minWidth = "680px";
@@ -583,8 +606,8 @@ function openConfigDialog(node, mode) {
 
   const help = document.createElement("p");
   help.textContent = mode === "input"
-    ? "Each parameter becomes a typed output slot; its Name is the API-export key and appears as a widget on the node."
-    : "Each parameter becomes a typed input slot. IMAGE inputs are saved to the output folder; a JSON schema is shown on the node.";
+    ? "Parameters keep this exact order. Name and default are required for every type; INT/FLOAT/SEED also require min, max, and step."
+    : "Parameters keep this exact order and require unique names. IMAGE inputs are saved to the output folder; a JSON schema is shown on the node.";
   help.style.opacity = "0.8"; help.style.fontSize = "12px"; help.style.margin = "0 0 12px 0";
   dlg.appendChild(help);
 
@@ -603,6 +626,7 @@ function openConfigDialog(node, mode) {
   const rowsEl = document.createElement("div");
   rowsEl.style.display = "flex"; rowsEl.style.flexDirection = "column"; rowsEl.style.gap = "8px";
   dlg.appendChild(rowsEl);
+  let pendingUploads = 0;
 
   const showSafetyMessage = (messages) => {
     if (!messages.length) {
@@ -623,11 +647,15 @@ function openConfigDialog(node, mode) {
 
       const typeSel = document.createElement("select");
       for (const tp of SUPPORTED_TYPES) { const o = document.createElement("option"); o.value = tp; o.textContent = tp; if (entry.type === tp) o.selected = true; typeSel.appendChild(o); }
-      typeSel.onchange = () => { entry.type = typeSel.value; renderRows(); };
+      typeSel.onchange = () => {
+        entry.type = typeSel.value;
+        if (entry.type === "SEED") applySeedDefaults(entry, true);
+        renderRows();
+      };
       typeSel.style.width = "90px";
 
       const nameIn = document.createElement("input");
-      nameIn.type = "text"; nameIn.value = entry.name || ""; nameIn.placeholder = "param name (API key)";
+      nameIn.type = "text"; nameIn.value = entry.name || ""; nameIn.placeholder = "name * (API key)";
       nameIn.style.flex = "1"; nameIn.style.minWidth = "110px";
       nameIn.oninput = () => { entry.name = nameIn.value; };
 
@@ -655,7 +683,28 @@ function openConfigDialog(node, mode) {
           fnameLbl.title = cur || "";
         };
         refresh();
-        fileInput.onchange = async () => { const file = fileInput.files && fileInput.files[0]; if (!file) return; pickBtn.textContent = "..."; try { const up = await uploadImage(file); entry.default = filenameFromUpload(up); refresh(); } catch (err) { fnameLbl.textContent = "failed"; } finally { pickBtn.textContent = "Upload"; } };
+        fileInput.onchange = async () => {
+          const file = fileInput.files && fileInput.files[0];
+          if (!file) return;
+          pendingUploads++;
+          pickBtn.disabled = true;
+          pickBtn.textContent = "...";
+          try {
+            const up = await uploadImage(file);
+            if (!dlg.isConnected) return;
+            entry.default = filenameFromUpload(up);
+            refresh();
+          } catch (err) {
+            if (dlg.isConnected) fnameLbl.textContent = "failed";
+          } finally {
+            pendingUploads--;
+            fileInput.value = "";
+            if (dlg.isConnected) {
+              pickBtn.disabled = false;
+              pickBtn.textContent = "Upload";
+            }
+          }
+        };
         row.appendChild(pickBtn); row.appendChild(fileInput); row.appendChild(thumb); row.appendChild(fnameLbl);
       } else if (entry.type === "BOOLEAN") {
         const boolSel = document.createElement("select");
@@ -669,19 +718,19 @@ function openConfigDialog(node, mode) {
         const isNum = NUMERIC_TYPES.includes(entry.type);
         defIn.type = isNum ? "number" : "text";
         defIn.value = entry.default ?? "";
-        defIn.placeholder = entry.type === "COMBO" ? "option string" : "default";
+        defIn.placeholder = entry.type === "COMBO" ? "default option *" : "default *";
         defIn.style.width = "110px";
         defIn.disabled = mode === "output";
-        defIn.oninput = () => { const v = defIn.value; if (v === "") { entry.default = null; return; } if (INT_TYPES.includes(entry.type)) entry.default = parseInt(v, 10); else if (entry.type === "FLOAT") entry.default = parseFloat(v); else entry.default = v; };
+        defIn.oninput = () => { const v = defIn.value; if (v === "") { entry.default = null; return; } if (NUMERIC_TYPES.includes(entry.type)) entry.default = Number(v); else entry.default = v; };
         row.appendChild(defIn);
       }
 
       // Range/step for numeric types (INT/FLOAT/SEED). SEED also gets after-run.
       if (NUMERIC_TYPES.includes(entry.type)) {
-        const mkNum = (key, ph) => { const inp = document.createElement("input"); inp.type = "number"; inp.value = entry[key] != null ? entry[key] : ""; inp.placeholder = ph; inp.style.width = "58px"; inp.disabled = mode === "output"; inp.oninput = () => { const v = inp.value; if (v === "") { entry[key] = null; return; } entry[key] = INT_TYPES.includes(entry.type) ? parseInt(v, 10) : parseFloat(v); }; return inp; };
+        const mkNum = (key, ph) => { const inp = document.createElement("input"); inp.type = "number"; inp.value = entry[key] != null ? entry[key] : ""; inp.placeholder = mode === "input" ? ph + " *" : ph; inp.style.width = "62px"; inp.disabled = mode === "output"; inp.oninput = () => { const v = inp.value; entry[key] = v === "" ? null : Number(v); }; return inp; };
         for (const [k, label] of [["min", "min"], ["max", "max"], ["step", "step"]]) { const l = document.createElement("span"); l.textContent = label; l.style.fontSize = "10px"; l.style.opacity = "0.6"; row.appendChild(l); row.appendChild(mkNum(k, label)); }
         if (entry.type === "SEED") {
-          const l = document.createElement("span"); l.textContent = "min/max blank = ComfyUI seed range"; l.style.fontSize = "9px"; l.style.opacity = "0.5"; l.style.flexBasis = "100%";
+          const l = document.createElement("span"); l.textContent = mode === "input" ? "ComfyUI defaults: 0 to 0xffffffffffffffff, step 1" : "SEED numeric metadata"; l.style.fontSize = "9px"; l.style.opacity = "0.5"; l.style.flexBasis = "100%";
           row.appendChild(l);
           if (mode === "input") {
             const l2 = document.createElement("span"); l2.textContent = "after run"; l2.style.fontSize = "10px"; l2.style.opacity = "0.6";
@@ -719,12 +768,20 @@ function openConfigDialog(node, mode) {
 
     let clean = null;
     if (applyChanges) {
+      if (pendingUploads > 0) {
+        showSafetyMessage(["Wait for all image uploads to finish before applying."]);
+        return;
+      }
       const errors = [];
       const seen = new Set(); clean = [];
       for (let i = 0; i < draft.length; i++) {
         const e = draft[i];
         const rowLabel = `Parameter ${i + 1}`;
         const n = (e.name || "").trim();
+        if (!SUPPORTED_TYPES.includes(e.type)) {
+          errors.push(`${rowLabel} has an unsupported type.`);
+          continue;
+        }
         if (!n) {
           errors.push(`${rowLabel} needs a name.`);
           continue;
@@ -733,15 +790,70 @@ function openConfigDialog(node, mode) {
           errors.push(`Parameter name '${n}' is duplicated.`);
           continue;
         }
-        if (mode === "input" && (e.default == null || (typeof e.default === "string" && e.default.trim() === ""))) {
+        const missingDefault = e.default == null || (typeof e.default === "string" && e.default.trim() === "");
+        if (mode === "input" && missingDefault && !NUMERIC_TYPES.includes(e.type)) {
           errors.push(`${rowLabel} ('${n}') needs a default value.`);
           continue;
         }
-        seen.add(n);
+
+        if (mode === "input" && NUMERIC_TYPES.includes(e.type)) {
+          const numericFields = [
+            ["default", e.default],
+            ["min", e.min],
+            ["max", e.max],
+            ["step", e.step],
+          ];
+          let numericInvalid = false;
+          for (const [field, value] of numericFields) {
+            if (value == null || value === "" || !Number.isFinite(Number(value))) {
+              errors.push(`${rowLabel} ('${n}') needs a valid ${field}.`);
+              numericInvalid = true;
+            } else if (INT_TYPES.includes(e.type) && !Number.isInteger(Number(value))) {
+              errors.push(`${rowLabel} ('${n}') ${field} must be an integer.`);
+              numericInvalid = true;
+            }
+          }
+          if (numericInvalid) continue;
+
+          const defaultValue = Number(e.default);
+          const minValue = Number(e.min);
+          const maxValue = Number(e.max);
+          const stepValue = Number(e.step);
+          if (e.type === "SEED" && (minValue < SEED_MIN || defaultValue < SEED_MIN || maxValue > SEED_MAX)) {
+            errors.push(`${rowLabel} ('${n}') seed values must be between ${SEED_MIN} and ${SEED_MAX}.`);
+            continue;
+          }
+          if (minValue > maxValue) {
+            errors.push(`${rowLabel} ('${n}') min must not exceed max.`);
+            continue;
+          }
+          if (defaultValue < minValue || defaultValue > maxValue) {
+            errors.push(`${rowLabel} ('${n}') default must be between min and max.`);
+            continue;
+          }
+          if (stepValue <= 0) {
+            errors.push(`${rowLabel} ('${n}') step must be greater than 0.`);
+            continue;
+          }
+          e.default = INT_TYPES.includes(e.type) ? Math.trunc(defaultValue) : defaultValue;
+          e.min = INT_TYPES.includes(e.type) ? Math.trunc(minValue) : minValue;
+          e.max = INT_TYPES.includes(e.type) ? Math.trunc(maxValue) : maxValue;
+          e.step = INT_TYPES.includes(e.type) ? Math.trunc(stepValue) : stepValue;
+        }
+
+        if (mode === "input" && e.type === "SEED") {
+          const controlModes = ["fixed", "randomize", "increment", "decrement"];
+          if (!controlModes.includes(e.controlMode || "randomize")) {
+            errors.push(`${rowLabel} ('${n}') has an invalid after-run mode.`);
+            continue;
+          }
+        }
+
         const c = { name: n, type: e.type, default: e.default };
         if (NUMERIC_TYPES.includes(e.type)) { c.min = e.min ?? null; c.max = e.max ?? null; c.step = e.step ?? null; }
         if (e.type === "SEED") c.controlMode = e.controlMode || "randomize";
         clean.push(c);
+        seen.add(n);
       }
       if (errors.length) {
         showSafetyMessage(errors);
