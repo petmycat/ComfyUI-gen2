@@ -217,79 +217,43 @@ function imageRefToViewUrl(ref) {
   return viewUrl(name, subfolder, "input");
 }
 
-// ---- Slot rebuild (fully remove param slots, keep PANEL_LINK at index 0) ----
-function rebuildSlots(node, mode, entries) {
-  if (mode === "input") {
-    if (!node.outputs) node.outputs = [];
-    while (node.outputs.length > 1) node.removeOutput(node.outputs.length - 1);
-    if (node.outputs.length === 0) node.addOutput(PANEL_LINK_NAME, "*");
-    node.outputs[0].name = PANEL_LINK_NAME; node.outputs[0].label = "panel_link"; node.outputs[0].type = "*";
-    for (let i = 0; i < entries.length; i++) {
-      node.addOutput(SLOT_PREFIX + i, slotTypeFor(entries[i].type));
-      const s = node.outputs[node.outputs.length - 1];
-      s.label = entries[i].name || SLOT_PREFIX + i;
-      s.__gen2ParamId = entries[i].id;
-    }
-  } else {
-    if (!node.inputs) node.inputs = [];
-    while (node.inputs.length > 1) node.removeInput(node.inputs.length - 1);
-    if (node.inputs.length === 0) node.addInput(PANEL_LINK_NAME, "*");
-    node.inputs[0].name = PANEL_LINK_NAME; node.inputs[0].label = "panel_link"; node.inputs[0].type = "*";
-    for (let i = 0; i < entries.length; i++) {
-      node.addInput(SLOT_PREFIX + i, slotTypeFor(entries[i].type));
-      const s = node.inputs[node.inputs.length - 1];
-      s.label = entries[i].name || SLOT_PREFIX + i;
-      s.__gen2ParamId = entries[i].id;
-    }
-  }
-}
+// ---- Slot lifecycle ----
+// PANEL_LINK permanently occupies slot 0. Normal node/widget rebuilds update
+// parameter slots in place so existing graph links keep their slot identity.
+// Configure Apply explicitly refreshes only parameter slots, which intentionally
+// disconnects them while leaving PANEL_LINK untouched.
+function syncSlots(node, mode, entries, refreshParameters = false) {
+  const slotsKey = mode === "input" ? "outputs" : "inputs";
+  const addSlot = mode === "input"
+    ? (name, type) => node.addOutput(name, type)
+    : (name, type) => node.addInput(name, type);
+  const removeSlot = mode === "input"
+    ? (index) => node.removeOutput(index)
+    : (index) => node.removeInput(index);
 
-// ---- Link capture / restore by param name (fixes wrong-slot-on-delete) ----
-function captureLinks(node, mode) {
-  const map = {};
-  if (!node.graph) return map;
-  if (mode === "input") {
-    for (const out of node.outputs || []) {
-      if (out.name === PANEL_LINK_NAME || !out.links) continue;
-      const key = out.__gen2ParamId || out.label || out.name;
-      for (const lid of out.links) {
-        const link = node.graph.links[lid];
-        if (link) (map[key] = map[key] || []).push({ target_id: link.target_id, target_slot: link.target_slot });
-      }
-    }
-  } else {
-    for (const inp of node.inputs || []) {
-      if (inp.name === PANEL_LINK_NAME || inp.link == null) continue;
-      const key = inp.__gen2ParamId || inp.label || inp.name;
-      const link = node.graph.links[inp.link];
-      if (link) map[key] = { origin_id: link.origin_id, origin_slot: link.origin_slot };
-    }
-  }
-  return map;
-}
+  if (!node[slotsKey]) node[slotsKey] = [];
+  const slots = node[slotsKey];
+  if (slots.length === 0) addSlot(PANEL_LINK_NAME, "*");
 
-function restoreLinks(node, mode, map) {
-  if (!node.graph) return;
-  if (mode === "input") {
-    for (let i = 0; i < node.outputs.length; i++) {
-      const out = node.outputs[i];
-      if (out.name === PANEL_LINK_NAME) continue;
-      const targets = map[out.__gen2ParamId || out.label || out.name];
-      if (!targets) continue;
-      for (const t of targets) {
-        const tnode = node.graph.getNodeById(t.target_id);
-        if (tnode) { try { node.connect(i, tnode, t.target_slot); } catch (e) {} }
-      }
-    }
+  const panelLink = node[slotsKey][0];
+  panelLink.name = PANEL_LINK_NAME;
+  panelLink.label = "panel_link";
+  panelLink.type = "*";
+
+  if (refreshParameters) {
+    while (node[slotsKey].length > 1) removeSlot(node[slotsKey].length - 1);
   } else {
-    for (let i = 0; i < node.inputs.length; i++) {
-      const inp = node.inputs[i];
-      if (inp.name === PANEL_LINK_NAME) continue;
-      const src = map[inp.__gen2ParamId || inp.label || inp.name];
-      if (!src) continue;
-      const snode = node.graph.getNodeById(src.origin_id);
-      if (snode) { try { snode.connect(src.origin_slot, node, i); } catch (e) {} }
-    }
+    while (node[slotsKey].length > entries.length + 1) removeSlot(node[slotsKey].length - 1);
+  }
+
+  for (let i = 0; i < entries.length; i++) {
+    const slotIndex = i + 1;
+    if (!node[slotsKey][slotIndex]) addSlot(SLOT_PREFIX + i, slotTypeFor(entries[i].type));
+    const slot = node[slotsKey][slotIndex];
+    slot.name = SLOT_PREFIX + i;
+    slot.label = entries[i].name || SLOT_PREFIX + i;
+    slot.type = slotTypeFor(entries[i].type);
+    slot.__gen2ParamId = entries[i].id;
   }
 }
 
@@ -597,19 +561,6 @@ function refreshSchemaBox(node) {
     : "";
 }
 
-function panelRenderSignature(entries) {
-  return JSON.stringify(entries.map((e) => {
-    const signature = { id: e.id, name: e.name, type: e.type };
-    if (NUMERIC_TYPES.includes(e.type)) {
-      signature.min = e.min ?? null;
-      signature.max = e.max ?? null;
-      signature.step = e.step ?? null;
-    }
-    if (e.type === "SEED") signature.controlMode = e.controlMode || "randomize";
-    return signature;
-  }));
-}
-
 function refreshPanelLayout(node) {
   const applySize = () => {
     try {
@@ -626,27 +577,10 @@ function refreshPanelLayout(node) {
   if (typeof requestAnimationFrame === "function") requestAnimationFrame(applySize);
 }
 
-function updatePanelDefaultsInPlace(node, mode, entries) {
-  const current = parseConfig(getConfigWidget(node)?.value || "[]");
-  if (panelRenderSignature(current) !== panelRenderSignature(entries)) return false;
-  if (mode === "input" && (!node.gen2ParamWidgets || node.gen2ParamWidgets.length !== entries.length)) return false;
-
-  setConfig(node, entries, mode);
-  if (mode === "input") {
-    for (let i = 0; i < entries.length; i++) Object.assign(node.gen2ParamWidgets[i].entry, entries[i]);
-  } else {
-    node.gen2LatestDocument = null;
-    refreshSchemaBox(node);
-  }
-  refreshPanelLayout(node);
-  return true;
-}
-
-// ---- Rebuild whole panel (buttons + params + slots + schema), preserving links ----
+// ---- Rebuild whole panel (buttons + params + slots + schema) ----
 function rebuildPanel(node, mode) {
   const generation = (node.__gen2WidgetGeneration || 0) + 1;
   node.__gen2WidgetGeneration = generation;
-  const links = captureLinks(node, mode);
   clearManagedWidgets(node);
 
   const build = () => {
@@ -658,7 +592,7 @@ function rebuildPanel(node, mode) {
     const entries = parseConfig(getConfigWidget(node)?.value || "[]");
     setConfig(node, entries, mode);
     pruneRuntimeValues(node, entries);
-    rebuildSlots(node, mode, entries);
+    syncSlots(node, mode, entries);
 
     if (mode === "input") {
       for (let i = 0; i < entries.length; i++) node.gen2ParamWidgets.push(makeParamWidget(node, i, entries[i]));
@@ -678,7 +612,6 @@ function rebuildPanel(node, mode) {
       refreshSchemaBox(node);
     }
 
-    restoreLinks(node, mode, links);
     refreshPanelLayout(node);
   };
 
@@ -1007,10 +940,13 @@ function openConfigDialog(node, mode) {
       releaseCanvasInteraction(node);
       if (clean) {
         if (mode === "input") migrateRuntimeValues(node, entries, clean);
-        if (!updatePanelDefaultsInPlace(node, mode, clean)) {
-          setConfig(node, clean, mode);
-          rebuildPanel(node, mode);
-        }
+        else node.gen2LatestDocument = null;
+        setConfig(node, clean, mode);
+        // Apply is an explicit parameter-interface refresh. Recreate parameter
+        // slots synchronously even when the draft is unchanged, but never touch
+        // slot 0 so PANEL_LINK remains stable. Widget rebuilding stays deferred.
+        syncSlots(node, mode, clean, true);
+        rebuildPanel(node, mode);
       } else {
         // Cancel must not rebuild or replace working widgets. It only dismisses
         // the draft dialog and restores canvas interaction.
