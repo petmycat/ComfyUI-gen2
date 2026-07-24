@@ -46,6 +46,7 @@ class Gen2_PrepareFlux2FunControl:
                 "control_image": ("IMAGE",),
                 "mask": ("MASK",),
                 "inpaint_image": ("IMAGE",),
+                "target_latent": ("LATENT",),
             },
         }
 
@@ -53,10 +54,10 @@ class Gen2_PrepareFlux2FunControl:
     RETURN_NAMES = ("control_context",)
     FUNCTION = "prepare"
     CATEGORY = CATEGORY
-    DESCRIPTION = "Prepare exact [control latents, preserved mask, inpaint latents] 260-channel Flux.2 Fun tokens."
+    DESCRIPTION = "Prepare exact 260-channel Flux.2 Fun tokens; connect target_latent to match the sampled main image size."
 
-    def prepare(self, vae, control_image=None, mask=None, inpaint_image=None):
-        return (prepare_control_context(vae, control_image, mask, inpaint_image),)
+    def prepare(self, vae, control_image=None, mask=None, inpaint_image=None, target_latent=None):
+        return (prepare_control_context(vae, control_image, mask, inpaint_image, target_latent),)
 
 
 class Gen2_ApplyFlux2FunControl:

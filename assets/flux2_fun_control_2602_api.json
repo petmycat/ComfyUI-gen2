@@ -10,6 +10,7 @@
   "2": {
     "inputs": {
       "vae": ["YOUR_FLUX2_VAE_NODE", 0],
+      "target_latent": ["YOUR_SAMPLING_LATENT_NODE", 0],
       "control_image": ["YOUR_CONTROL_IMAGE_NODE", 0]
     },
     "class_type": "Gen2_PrepareFlux2FunControl",

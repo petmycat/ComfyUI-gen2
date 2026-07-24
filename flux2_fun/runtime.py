@@ -92,11 +92,15 @@ class Flux2FunDispatcher:
 
         for descriptor in state.descriptors:
             context = descriptor.context
-            if context.main_tokens + reference_tokens != img.shape[1]:
+            expected_main_tokens = int(img.shape[1]) - reference_tokens
+            if context.main_tokens != expected_main_tokens:
                 raise ValueError(
-                    "Flux2 Fun token mismatch: prepared main tokens "
-                    f"{context.main_tokens} + reference tokens {reference_tokens} != current image tokens {img.shape[1]}. "
-                    "Token tensors are never resized heuristically."
+                    "Flux2 Fun main-image token mismatch: prepared context has "
+                    f"{context.main_tokens} tokens from latent {context.latent_height}x{context.latent_width}, "
+                    f"but the sampler requires {expected_main_tokens} main tokens "
+                    f"({img.shape[1]} total - {reference_tokens} reference). "
+                    "Connect the same sampling LATENT to Prepare Flux2 Fun Control's target_latent input. "
+                    "Packed token tensors are never resized at runtime."
                 )
             control_context = append_reference_zeros(
                 context,
