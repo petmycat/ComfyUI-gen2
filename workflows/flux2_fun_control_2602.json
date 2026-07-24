@@ -27,6 +27,7 @@
       "mode": 0,
       "inputs": [
         {"name": "vae", "type": "VAE", "link": null},
+        {"name": "target_latent", "type": "LATENT", "link": null},
         {"name": "control_image", "type": "IMAGE", "link": null},
         {"name": "mask", "type": "MASK", "link": null},
         {"name": "inpaint_image", "type": "IMAGE", "link": null}

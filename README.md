@@ -45,7 +45,7 @@ Sections have independent, optional prerequisites — install only what you use:
 | Node | Description |
 |------|-------------|
 | **Load Flux2 Fun ControlNet** | Strictly loads the official 2602 checkpoint from `models/controlnet`. It validates the 76-key architecture profile and always verifies SHA256 `516532a885d12ae84bb3c6b24ef4816ac05ffa1c9c7b93476f74652eb0a7a794`. |
-| **Prepare Flux2 Fun Control** | Uses ComfyUI's Flux.2 VAE and packs `[control_latents(128), preserved_mask(4), inpaint_latents(128)]`. White input mask means repaint; absent image branches are direct zero latents. |
+| **Prepare Flux2 Fun Control** | Uses ComfyUI's Flux.2 VAE and packs `[control_latents(128), preserved_mask(4), inpaint_latents(128)]`. Connect the sampling `LATENT` to `target_latent` so the control canvas exactly matches the main image tokens. White input mask means repaint; absent image branches are direct zero latents. |
 | **Apply Flux2 Fun Control** | Clones a Flux.2 Dev `MODEL`, registers the managed control branch once, and composes clone-local replacements at double blocks 0/2/4/6. Supports strength and start/end percentages. |
 | **Combine Flux2 Fun Controls (experimental)** | Creates a deterministic immutable control group. Multi-control remains experimental until the complete GPU matrix passes. |
 

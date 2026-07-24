@@ -123,6 +123,7 @@ def prepare_control_context(
     control_image: torch.Tensor | None = None,
     mask: torch.Tensor | None = None,
     inpaint_image: torch.Tensor | None = None,
+    target_latent: dict | None = None,
 ) -> PreparedFlux2FunContext:
     if control_image is None and inpaint_image is None:
         raise ValueError("Prepare Flux2 Fun Control requires control_image or inpaint_image.")
@@ -139,8 +140,20 @@ def prepare_control_context(
     downscale = int(getattr(vae, "downscale_ratio", 0) or 0)
     if downscale != 16:
         raise ValueError(f"Flux.2 VAE downscale_ratio must be 16, got {downscale}.")
-    height = (height // downscale) * downscale
-    width = (width // downscale) * downscale
+    if target_latent is not None:
+        samples = target_latent.get("samples") if isinstance(target_latent, dict) else None
+        if not isinstance(samples, torch.Tensor) or samples.ndim != 4 or samples.shape[1] != FLUX2_LATENT_CHANNELS:
+            shape = tuple(samples.shape) if isinstance(samples, torch.Tensor) else None
+            raise ValueError(
+                "target_latent must be a Flux.2 LATENT with samples [B,128,H,W]; "
+                f"got {shape}."
+            )
+        batch = int(samples.shape[0])
+        height = int(samples.shape[-2]) * downscale
+        width = int(samples.shape[-1]) * downscale
+    else:
+        height = (height // downscale) * downscale
+        width = (width // downscale) * downscale
     if height <= 0 or width <= 0:
         raise ValueError(f"Images are too small for Flux.2 VAE encoding: {(height, width)}.")
 

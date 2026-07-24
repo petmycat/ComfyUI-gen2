@@ -18,7 +18,8 @@ The control branch contains only `control_img_in`, the four control transformer 
 
 ## Preprocessing contract
 
-- ComfyUI IMAGE inputs are resized to a shared multiple-of-16 canvas.
+- Connect the exact sampling `LATENT` to `target_latent`; control, mask, and inpaint images are resized to that Flux.2 latent canvas before VAE encoding.
+- Without `target_latent`, ComfyUI IMAGE inputs fall back to a shared multiple-of-16 canvas derived from their own dimensions; this is only safe when it exactly matches the sampled latent.
 - White input mask means repaint.
 - The inpaint image is zeroed in repaint regions before VAE encoding.
 - ComfyUI's Flux.2 VAE must return `[B,128,H,W]`, already 2×2-patchified and BN-normalized.

@@ -104,6 +104,29 @@ class PreprocessTests(unittest.TestCase):
         self.assertTrue(torch.all(context.packed[:, :2, 132:] == 0))
         self.assertTrue(torch.all(context.packed[:, 2:, 132:] == 1))
 
+    def test_target_latent_controls_exact_canvas_and_batch(self):
+        control = torch.ones(1, 32, 48, 3)
+        target = {"samples": torch.zeros(2, 128, 3, 5)}
+        context = preprocess.prepare_control_context(FakeVAE(), control_image=control, target_latent=target)
+        self.assertEqual(context.packed.shape, (2, 15, 260))
+        self.assertEqual((context.latent_height, context.latent_width, context.batch_size), (3, 5, 2))
+
+    def test_target_latent_batch_is_authoritative(self):
+        with self.assertRaisesRegex(ValueError, "Cannot align control_image batch 2 to target batch 1"):
+            preprocess.prepare_control_context(
+                FakeVAE(),
+                control_image=torch.ones(2, 32, 32, 3),
+                target_latent={"samples": torch.zeros(1, 128, 2, 2)},
+            )
+
+    def test_target_latent_requires_flux2_contract(self):
+        with self.assertRaisesRegex(ValueError, "\[B,128,H,W\]"):
+            preprocess.prepare_control_context(
+                FakeVAE(),
+                control_image=torch.ones(1, 32, 32, 3),
+                target_latent={"samples": torch.zeros(1, 16, 2, 2)},
+            )
+
     def test_missing_branch_is_direct_zero_latent(self):
         context = preprocess.prepare_control_context(FakeVAE(), inpaint_image=torch.ones(1, 32, 32, 3))
         self.assertTrue(torch.count_nonzero(context.packed[..., :128]) == 0)
@@ -363,7 +386,7 @@ class RuntimeTests(unittest.TestCase):
             "pe": None,
             "transformer_options": {"reference_image_num_tokens": [1]},
         }
-        with self.assertRaisesRegex(ValueError, "Token tensors are never resized"):
+        with self.assertRaisesRegex(ValueError, "target_latent"):
             dispatcher._compute_hints(args, runtime.ForwardState((descriptor,)))
 
 
