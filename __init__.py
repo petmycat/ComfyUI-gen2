@@ -58,6 +58,17 @@ except ImportError as e:
     API_NODE_DISPLAY_NAME_MAPPINGS = {}
     API_AVAILABLE = False
 
+# Import native-style Flux.2 Fun ControlNet nodes
+try:
+    from .flux2_fun import NODE_CLASS_MAPPINGS as FLUX2_FUN_NODE_CLASS_MAPPINGS
+    from .flux2_fun import NODE_DISPLAY_NAME_MAPPINGS as FLUX2_FUN_NODE_DISPLAY_NAME_MAPPINGS
+    FLUX2_FUN_AVAILABLE = True
+except ImportError as e:
+    print(f"[Gen2] Flux2 Fun ControlNet nodes not available: {e}")
+    FLUX2_FUN_NODE_CLASS_MAPPINGS = {}
+    FLUX2_FUN_NODE_DISPLAY_NAME_MAPPINGS = {}
+    FLUX2_FUN_AVAILABLE = False
+
 # Combine all node mappings
 NODE_CLASS_MAPPINGS = {
     **QWENIMAGE_NODE_CLASS_MAPPINGS,
@@ -65,6 +76,7 @@ NODE_CLASS_MAPPINGS = {
     **TILING_NODE_CLASS_MAPPINGS,
     **SAMPLING_NODE_CLASS_MAPPINGS,
     **API_NODE_CLASS_MAPPINGS,
+    **FLUX2_FUN_NODE_CLASS_MAPPINGS,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -73,6 +85,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     **TILING_NODE_DISPLAY_NAME_MAPPINGS,
     **SAMPLING_NODE_DISPLAY_NAME_MAPPINGS,
     **API_NODE_DISPLAY_NAME_MAPPINGS,
+    **FLUX2_FUN_NODE_DISPLAY_NAME_MAPPINGS,
 }
 
 # Frontend extension: the Configure popup + dynamic slot management for the

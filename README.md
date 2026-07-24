@@ -4,7 +4,8 @@ A general-purpose ComfyUI custom node pack collecting the sampling fixes, model-
 
 ## What's in here
 
-- **Gen2 Sampling** — compatibility patches that keep model behavior stable across ComfyUI upgrades. Currently: a fix that restores correct **Flux.2 [klein]** output (reference-latent / masked-inpaint workflows) on ComfyUI ≥ v0.17.0, where a core refactor silently changed results.
+- **Flux.2 Fun ControlNet** — branch-only support for Alibaba PAI's official `FLUX.2-dev-Fun-Controlnet-Union-2602.safetensors`, using clone-local ComfyUI block replacements, native model management, exact 260-channel control context packing, reference tokens, schedules, and experimental multi-control composition.
+- **Gen2 Sampling** — compatibility patches that keep model behavior stable across ComfyUI upgrades. Currently: a fix that restores correct **Flux.2 [klein]** output (reference-latent / masked-inpaint workflows) where a core refactor silently changed results.
 - **Tiling** — tile-based workflow nodes: auto-grid splitting with overlap halos, per-tile masks, seam-aware merging, and a two-pass seam-fix denoise (great for high-res inpaint and tiled upscaling).
 - **API Panels** — a pair of configurable nodes (`Gen2 Input Panel` / `Gen2 Output Panel`) that replace a workflow's scattered `INPUT_*`/`OUTPUT_*` constant nodes. Click **Configure** to define named, typed parameters; each name becomes a typed slot and the API-export key. Designed for driving ComfyUI via the API export. Works on both the legacy LiteGraph and Nodes 2.0 (Vue) frontends.
 - **Utilities** — small QoL nodes: string replace, checkerboard generator, DWpose-with-thresholds.
@@ -21,8 +22,11 @@ cd ComfyUI-gen2
 pip install -r requirements.txt
 ```
 
+This release requires **ComfyUI v0.28.0 or newer**. The Flux.2 Fun integration is pinned and validated against ComfyUI commit `700821e1364eaab0e8f21c538a2131719fec57bf`.
+
 Sections have independent, optional prerequisites — install only what you use:
 
+- **Flux.2 Fun ControlNet** — no Python package beyond ComfyUI. Put the official `FLUX.2-dev-Fun-Controlnet-Union-2602.safetensors` in `ComfyUI/models/controlnet/`.
 - **Gen2 Sampling / Utilities (string, checkerboard)** — no extra dependencies.
 - **Tiling** — needs `scipy` (Gaussian mask feathering). Without it you'll see `[Gen2] Tiling nodes not available: ...` and everything else still loads.
 - **DWpose utility** — needs `comfyui_controlnet_aux`.
@@ -31,9 +35,37 @@ Sections have independent, optional prerequisites — install only what you use:
 ## Credits
 
 - **[ComfyUI](https://github.com/Comfy-Org/ComfyUI)** - The modular diffusion GUI this pack extends.
-- **[VideoX-Fun](https://github.com/aigc-apps/VideoX-Fun/tree/main/comfyui/qwenimage)** - The original QwenImage ControlNet implementation the (now outdated) QwenImage section is derived from.
+- **[VideoX-Fun](https://github.com/aigc-apps/VideoX-Fun)** - Flux.2 Fun mathematical oracle pinned to commit `248ab0ac0ebc48f0b4ae43ceb2d7ded24cc907bb`, and the source of the legacy QwenImage section.
+- **[Alibaba PAI FLUX.2 Fun ControlNet Union](https://huggingface.co/alibaba-pai/FLUX.2-dev-Fun-Controlnet-Union)** - Official 2602 checkpoint. Model weights remain subject to their upstream license and usage terms.
 
 ## Nodes
+
+### Flux.2 Fun ControlNet
+
+| Node | Description |
+|------|-------------|
+| **Load Flux2 Fun ControlNet** | Strictly loads the official 2602 checkpoint from `models/controlnet`. It validates the 76-key architecture profile and always verifies SHA256 `516532a885d12ae84bb3c6b24ef4816ac05ffa1c9c7b93476f74652eb0a7a794`. |
+| **Prepare Flux2 Fun Control** | Uses ComfyUI's Flux.2 VAE and packs `[control_latents(128), preserved_mask(4), inpaint_latents(128)]`. White input mask means repaint; absent image branches are direct zero latents. |
+| **Apply Flux2 Fun Control** | Clones a Flux.2 Dev `MODEL`, registers the managed control branch once, and composes clone-local replacements at double blocks 0/2/4/6. Supports strength and start/end percentages. |
+| **Combine Flux2 Fun Controls (experimental)** | Creates a deterministic immutable control group. Multi-control remains experimental until the complete GPU matrix passes. |
+
+Only **Flux.2 Dev + the 2602 checkpoint** is accepted. Flux.1, Flux.2 Klein, the older Union checkpoint, and shape-incompatible derivatives are rejected. The implementation does not replace `Flux.forward_orig`, does not globally monkey-patch ComfyUI, and never resizes token tensors heuristically.
+
+Reference images are supported through ComfyUI's `reference_image_num_tokens`; the control context receives zero-valued reference positions and runs over the complete image-token sequence. `index_timestep_zero` modulation regions are consumed from the real ComfyUI block payload rather than reimplemented globally.
+
+A template workflow is provided at `workflows/flux2_fun_control_2602.json`, with an API fragment at `assets/flux2_fun_control_2602_api.json`. The development machine does not contain the production GPU/weight environment, so real-weight end-to-end parity is explicitly **not yet claimed**; the opt-in harness and acceptance matrix live under `tests/`.
+
+### Compatibility matrix
+
+| Component | Status |
+|---|---|
+| ComfyUI v0.28.0 / commit `700821e...` | Targeted runtime |
+| Newer ComfyUI | Expected, but rerun the GPU matrix after core Flux changes |
+| ComfyUI v0.10.0 | Not supported |
+| Official 2602 BF16 checkpoint | Supported |
+| BF16 / FP16 control compute | Implemented; production GPU validation required |
+| FP8 base + BF16/FP16 control | Architecture supported; production GPU validation required |
+| Multiple controls | Experimental |
 
 ### Gen2 Sampling
 
@@ -279,5 +311,5 @@ Supports multiple precision modes:
 
 ## License
 
-This project is licensed under the Apache License 2.0. It also follows the licensing requirements of its dependencies (VideoX-Fun, ComfyUI).
+This repository's original code is licensed under Apache License 2.0. ComfyUI, VideoX-Fun, and the Alibaba PAI Flux.2/control-model weights retain their own licenses and usage terms; downloading or using model weights is not covered by this repository's Apache license.
 

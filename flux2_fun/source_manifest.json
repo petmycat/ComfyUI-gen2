@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "mathematical_oracle": {
+    "repository": "https://github.com/aigc-apps/VideoX-Fun",
+    "commit": "248ab0ac0ebc48f0b4ae43ceb2d7ded24cc907bb",
+    "files": [
+      "videox_fun/models/flux2_transformer2d.py",
+      "videox_fun/models/flux2_transformer2d_control.py",
+      "videox_fun/pipeline/pipeline_flux2_control.py",
+      "comfyui/flux2/nodes.py"
+    ]
+  },
+  "runtime": {
+    "repository": "https://github.com/Comfy-Org/ComfyUI",
+    "version": "v0.28.0",
+    "commit": "700821e1364eaab0e8f21c538a2131719fec57bf"
+  },
+  "negative_reference": {
+    "repository": "https://github.com/bryanmcguire/comfyui-flux2fun-controlnet",
+    "commit": "9285022d86abcf4af29fd2aabff828fb4d408bdf",
+    "purpose": "checkpoint structure and failure-mode tests only"
+  },
+  "checkpoint": {
+    "repository": "alibaba-pai/FLUX.2-dev-Fun-Controlnet-Union",
+    "snapshot": "b3dcd7836a0e926248dac3ccba8fc0853495764b",
+    "filename": "FLUX.2-dev-Fun-Controlnet-Union-2602.safetensors",
+    "sha256": "516532a885d12ae84bb3c6b24ef4816ac05ffa1c9c7b93476f74652eb0a7a794",
+    "tensor_count": 76,
+    "dtype": "BF16",
+    "hidden_size": 6144,
+    "control_dim": 260,
+    "block_count": 4,
+    "block_layers": [0, 2, 4, 6],
+    "attention_heads": 48,
+    "attention_head_dim": 128,
+    "mlp_hidden_dim": 18432
+  }
+}
