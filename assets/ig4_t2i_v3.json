@@ -1,0 +1,2834 @@
+{
+  "id": "0076faa7-aac3-4dc2-8ab3-c11a38227b71",
+  "revision": 0,
+  "last_node_id": 363,
+  "last_link_id": 659,
+  "nodes": [
+    {
+      "id": 167,
+      "type": "CLIPTextEncode",
+      "pos": [
+        5680.311979656518,
+        -253.88552787672836
+      ],
+      "size": [
+        447.328125,
+        115.625
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 36,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 279
+        },
+        {
+          "name": "text",
+          "type": "STRING",
+          "widget": {
+            "name": "text"
+          },
+          "link": 594
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "slot_index": 0,
+          "links": [
+            602
+          ]
+        }
+      ],
+      "title": "CLIP Text Encode (Positive Prompt)",
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode",
+        "cnr_id": "comfy-core",
+        "ver": "0.8.2",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.8",
+          "input_ue_unconnectable": {}
+        },
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": [
+        ""
+      ],
+      "color": "#232",
+      "bgcolor": "#353"
+    },
+    {
+      "id": 198,
+      "type": "ModelSamplingAuraFlow",
+      "pos": [
+        6201.888339448463,
+        -876.0579079174524
+      ],
+      "size": [
+        271.5,
+        79.625
+      ],
+      "flags": {},
+      "order": 22,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 557
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            575,
+            576,
+            604,
+            605
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ModelSamplingAuraFlow",
+        "cnr_id": "comfy-core",
+        "ver": "0.24.0",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.8"
+        }
+      },
+      "widgets_values": [
+        3
+      ]
+    },
+    {
+      "id": 184,
+      "type": "CFGOverride",
+      "pos": [
+        6878.477016460924,
+        -853.361026271813
+      ],
+      "size": [
+        271.5,
+        175.328125
+      ],
+      "flags": {},
+      "order": 26,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 575
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            597
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CFGOverride",
+        "cnr_id": "comfy-core",
+        "ver": "0.23.0",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.8",
+          "input_ue_unconnectable": {}
+        },
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": [
+        1,
+        0.9,
+        1
+      ]
+    },
+    {
+      "id": 182,
+      "type": "DualModelGuider",
+      "pos": [
+        7526.362599916079,
+        -87.89523828469513
+      ],
+      "size": [
+        271.5,
+        192
+      ],
+      "flags": {},
+      "order": 39,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 601
+        },
+        {
+          "name": "positive",
+          "type": "CONDITIONING",
+          "link": 602
+        },
+        {
+          "name": "model_negative",
+          "shape": 7,
+          "type": "MODEL",
+          "link": 582
+        },
+        {
+          "name": "negative",
+          "shape": 7,
+          "type": "CONDITIONING",
+          "link": 622
+        },
+        {
+          "name": "cfg",
+          "type": "FLOAT",
+          "widget": {
+            "name": "cfg"
+          },
+          "link": 603
+        }
+      ],
+      "outputs": [
+        {
+          "name": "GUIDER",
+          "type": "GUIDER",
+          "links": [
+            254
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DualModelGuider",
+        "cnr_id": "comfy-core",
+        "ver": "0.23.0",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.8",
+          "input_ue_unconnectable": {}
+        },
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": [
+        3
+      ]
+    },
+    {
+      "id": 163,
+      "type": "KSamplerSelect",
+      "pos": [
+        6992.11547130945,
+        179.032403974744
+      ],
+      "size": [
+        271.5,
+        111.328125
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "SAMPLER",
+          "type": "SAMPLER",
+          "links": [
+            577
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "KSamplerSelect",
+        "cnr_id": "comfy-core",
+        "ver": "0.8.2",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.8",
+          "input_ue_unconnectable": {}
+        },
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": [
+        "euler"
+      ]
+    },
+    {
+      "id": 190,
+      "type": "BasicScheduler",
+      "pos": [
+        6683.392280666102,
+        167.8708645072174
+      ],
+      "size": [
+        271.5,
+        143.59375
+      ],
+      "flags": {},
+      "order": 27,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 576
+        }
+      ],
+      "outputs": [
+        {
+          "name": "SIGMAS",
+          "type": "SIGMAS",
+          "links": [
+            608
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "BasicScheduler",
+        "cnr_id": "comfy-core",
+        "ver": "0.24.0",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.8"
+        }
+      },
+      "widgets_values": [
+        "normal",
+        14,
+        1
+      ]
+    },
+    {
+      "id": 161,
+      "type": "SamplerCustomAdvanced",
+      "pos": [
+        8217.138763526877,
+        -60.8471316710433
+      ],
+      "size": [
+        285,
+        442.8125
+      ],
+      "flags": {},
+      "order": 41,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "noise",
+          "type": "NOISE",
+          "link": 629
+        },
+        {
+          "name": "guider",
+          "type": "GUIDER",
+          "link": 254
+        },
+        {
+          "name": "sampler",
+          "type": "SAMPLER",
+          "link": 578
+        },
+        {
+          "name": "sigmas",
+          "type": "SIGMAS",
+          "link": 612
+        },
+        {
+          "name": "latent_image",
+          "type": "LATENT",
+          "link": 230
+        }
+      ],
+      "outputs": [
+        {
+          "name": "output",
+          "type": "LATENT",
+          "links": [
+            524
+          ]
+        },
+        {
+          "name": "denoised_output",
+          "type": "LATENT",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "SamplerCustomAdvanced",
+        "cnr_id": "comfy-core",
+        "ver": "0.8.2",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.8",
+          "input_ue_unconnectable": {}
+        },
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 162,
+      "type": "VAEDecode",
+      "pos": [
+        8692.406262036835,
+        -235.67096090101552
+      ],
+      "size": [
+        225,
+        71.640625
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 42,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 524
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 232
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "slot_index": 0,
+          "links": [
+            238
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAEDecode",
+        "cnr_id": "comfy-core",
+        "ver": "0.8.2",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.8",
+          "input_ue_unconnectable": {}
+        },
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 25,
+      "type": "PreviewImage",
+      "pos": [
+        9153.494169658916,
+        -221.11511518394033
+      ],
+      "size": [
+        1231.5,
+        1056
+      ],
+      "flags": {},
+      "order": 43,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 238
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": [
+            656
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewImage",
+        "cnr_id": "comfy-core",
+        "ver": "0.23.0",
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65,
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.8",
+          "input_ue_unconnectable": {}
+        }
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 160,
+      "type": "EmptyFlux2LatentImage",
+      "pos": [
+        7490.043539668659,
+        1100.4142716103156
+      ],
+      "size": [
+        271.5,
+        175.328125
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 40,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": 458
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": 459
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            230
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "EmptyFlux2LatentImage",
+        "cnr_id": "comfy-core",
+        "ver": "0.8.2",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.8",
+          "input_ue_unconnectable": {}
+        },
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": [
+        1440,
+        1024,
+        1
+      ]
+    },
+    {
+      "id": 168,
+      "type": "CLIPLoader",
+      "pos": [
+        3533.1630892764506,
+        -376.45772352693274
+      ],
+      "size": [
+        463.5,
+        143.59375
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "CLIP",
+          "type": "CLIP",
+          "links": [
+            279,
+            569
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPLoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.8.2",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.8",
+          "input_ue_unconnectable": {}
+        },
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65,
+        "models": [
+          {
+            "name": "qwen3vl_8b_fp8_scaled.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/Qwen3-VL/resolve/main/text_encoders/qwen3vl_8b_fp8_scaled.safetensors",
+            "directory": "text_encoders"
+          }
+        ]
+      },
+      "widgets_values": [
+        "qwen3vl_8b_fp8_scaled.safetensors",
+        "ideogram4",
+        "default"
+      ]
+    },
+    {
+      "id": 158,
+      "type": "VAELoader",
+      "pos": [
+        3529.1916811433607,
+        -26.437158090039503
+      ],
+      "size": [
+        480,
+        111.328125
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            232
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "VAELoader",
+        "cnr_id": "comfy-core",
+        "ver": "0.8.2",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.8",
+          "input_ue_unconnectable": {}
+        },
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65,
+        "models": [
+          {
+            "name": "flux2-vae.safetensors",
+            "url": "https://huggingface.co/Comfy-Org/flux2-dev/resolve/main/split_files/vae/flux2-vae.safetensors",
+            "directory": "vae"
+          }
+        ]
+      },
+      "widgets_values": [
+        "flux2-vae.safetensors"
+      ]
+    },
+    {
+      "id": 267,
+      "type": "UNETLoader",
+      "pos": [
+        3521.2936815396024,
+        -633.8880786291885
+      ],
+      "size": [
+        490.5,
+        111.609375
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            585
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "ideogram4_unconditional_fp8_scaled.safetensors",
+        "default"
+      ]
+    },
+    {
+      "id": 268,
+      "type": "UNETLoader",
+      "pos": [
+        3524.049504372332,
+        -916.3094376679261
+      ],
+      "size": [
+        439.5,
+        129
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            584
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "UNETLoader"
+      },
+      "widgets_values": [
+        "ideogram4_fp8_scaled.safetensors",
+        "default"
+      ]
+    },
+    {
+      "id": 277,
+      "type": "Image Aspect Ratio",
+      "pos": [
+        5974.93130276404,
+        589.8239092695999
+      ],
+      "size": [
+        225,
+        167.625
+      ],
+      "flags": {},
+      "order": 23,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 448
+        },
+        {
+          "name": "width",
+          "shape": 7,
+          "type": "NUMBER",
+          "link": null
+        },
+        {
+          "name": "height",
+          "shape": 7,
+          "type": "NUMBER",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "aspect_number",
+          "type": "NUMBER",
+          "links": []
+        },
+        {
+          "name": "aspect_float",
+          "type": "FLOAT",
+          "links": []
+        },
+        {
+          "name": "is_landscape_bool",
+          "type": "NUMBER",
+          "links": [
+            453
+          ]
+        },
+        {
+          "name": "aspect_ratio_common",
+          "type": "STRING",
+          "links": []
+        },
+        {
+          "name": "aspect_type",
+          "type": "STRING",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Image Aspect Ratio",
+        "cnr_id": "was-ns",
+        "ver": "afeee09ba44e713ec52a413ac6b105fd06b2d356"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 278,
+      "type": "BestResolutionFromArea",
+      "pos": [
+        6890.08350359742,
+        1135.1734414639834
+      ],
+      "size": [
+        475.921875,
+        323.484375
+      ],
+      "flags": {},
+      "order": 38,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "landscape",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "landscape"
+          },
+          "link": 449
+        },
+        {
+          "name": "aspect_a",
+          "type": "FLOAT",
+          "widget": {
+            "name": "aspect_a"
+          },
+          "link": 450
+        },
+        {
+          "name": "aspect_b",
+          "type": "FLOAT",
+          "widget": {
+            "name": "aspect_b"
+          },
+          "link": 451
+        }
+      ],
+      "outputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "links": [
+            458
+          ]
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "links": [
+            459
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "BestResolutionFromArea",
+        "cnr_id": "best-resolution",
+        "ver": "1.1.6"
+      },
+      "widgets_values": [
+        2048,
+        16,
+        true,
+        16,
+        9
+      ]
+    },
+    {
+      "id": 279,
+      "type": "easy imageRatio",
+      "pos": [
+        6318.717891130254,
+        952.6421146416048
+      ],
+      "size": [
+        234.171875,
+        211.609375
+      ],
+      "flags": {},
+      "order": 24,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 452
+        }
+      ],
+      "outputs": [
+        {
+          "name": "width_ratio_int",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "height_ratio_int",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "width_ratio_float",
+          "type": "FLOAT",
+          "links": [
+            450
+          ]
+        },
+        {
+          "name": "height_ratio_float",
+          "type": "FLOAT",
+          "links": [
+            451
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "easy imageRatio",
+        "cnr_id": "comfyui-easy-use",
+        "ver": "e900c2ca9c0d90b0896881910ca7f3f02d88ebd8"
+      },
+      "widgets_values": [
+        "Image Ratio is 9:4"
+      ]
+    },
+    {
+      "id": 280,
+      "type": "Number to Int",
+      "pos": [
+        6282.940245031783,
+        625.3395928333887
+      ],
+      "size": [
+        225,
+        71.625
+      ],
+      "flags": {},
+      "order": 30,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "number",
+          "type": "NUMBER",
+          "link": 453
+        }
+      ],
+      "outputs": [
+        {
+          "name": "INT",
+          "type": "INT",
+          "links": [
+            454
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Number to Int",
+        "cnr_id": "was-ns",
+        "ver": "afeee09ba44e713ec52a413ac6b105fd06b2d356"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 281,
+      "type": "easy compare",
+      "pos": [
+        6582.764567992127,
+        693.7618450308992
+      ],
+      "size": [
+        225,
+        127.609375
+      ],
+      "flags": {},
+      "order": 35,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "a",
+          "shape": 7,
+          "type": "*",
+          "link": 454
+        },
+        {
+          "name": "b",
+          "shape": 7,
+          "type": "*",
+          "link": 455
+        }
+      ],
+      "outputs": [
+        {
+          "name": "boolean",
+          "type": "BOOLEAN",
+          "links": [
+            449
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "easy compare",
+        "cnr_id": "comfyui-easy-use",
+        "ver": "e900c2ca9c0d90b0896881910ca7f3f02d88ebd8"
+      },
+      "widgets_values": [
+        "a == b"
+      ]
+    },
+    {
+      "id": 282,
+      "type": "easy int",
+      "pos": [
+        5540.363871535495,
+        1029.219106795981
+      ],
+      "size": [
+        225,
+        103.609375
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "int",
+          "type": "INT",
+          "links": [
+            455
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "easy int",
+        "cnr_id": "comfyui-easy-use",
+        "ver": "e900c2ca9c0d90b0896881910ca7f3f02d88ebd8"
+      },
+      "widgets_values": [
+        1
+      ]
+    },
+    {
+      "id": 283,
+      "type": "Reroute",
+      "pos": [
+        5820.129420117103,
+        809.8622076221709
+      ],
+      "size": [
+        75,
+        25.984375
+      ],
+      "flags": {},
+      "order": 21,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "",
+          "type": "*",
+          "link": 456
+        }
+      ],
+      "outputs": [
+        {
+          "name": "",
+          "type": "IMAGE",
+          "links": [
+            448,
+            452,
+            588
+          ]
+        }
+      ],
+      "properties": {
+        "showOutputText": false,
+        "horizontal": false
+      }
+    },
+    {
+      "id": 284,
+      "type": "GetImageSizeAndCount",
+      "pos": [
+        5538.683472470191,
+        768.043794851692
+      ],
+      "size": [
+        225,
+        143.625
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 586
+        }
+      ],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            456
+          ]
+        },
+        {
+          "label": "288 width",
+          "name": "width",
+          "type": "INT",
+          "links": [
+            589
+          ]
+        },
+        {
+          "label": "128 height",
+          "name": "height",
+          "type": "INT",
+          "links": [
+            590
+          ]
+        },
+        {
+          "label": "1 count",
+          "name": "count",
+          "type": "INT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "GetImageSizeAndCount",
+        "cnr_id": "comfyui-kjnodes",
+        "ver": "98618295c32d41a796754915a1ba1b12ee15eba3"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 321,
+      "type": "Ideogram4OptimizationsKJ",
+      "pos": [
+        5786.720111584391,
+        -895.6878778701732
+      ],
+      "size": [
+        286.5,
+        191.578125
+      ],
+      "flags": {},
+      "order": 20,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 574
+        }
+      ],
+      "outputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "links": [
+            557
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Ideogram4OptimizationsKJ"
+      },
+      "widgets_values": [
+        true,
+        2,
+        1024,
+        true
+      ]
+    },
+    {
+      "id": 325,
+      "type": "CLIPTextEncode",
+      "pos": [
+        5703.202832591814,
+        99.16685886415883
+      ],
+      "size": [
+        399.640625,
+        199.640625
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "clip",
+          "type": "CLIP",
+          "link": 569
+        }
+      ],
+      "outputs": [
+        {
+          "name": "CONDITIONING",
+          "type": "CONDITIONING",
+          "links": [
+            622
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CLIPTextEncode"
+      },
+      "widgets_values": [
+        "watermark"
+      ]
+    },
+    {
+      "id": 326,
+      "type": "Epsilon Scaling",
+      "pos": [
+        5402.78270758321,
+        -890.1918595837426
+      ],
+      "size": [
+        270,
+        79.625
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 573
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            574
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Epsilon Scaling"
+      },
+      "widgets_values": [
+        1.024
+      ]
+    },
+    {
+      "id": 327,
+      "type": "PatchFlashAttentionKJ",
+      "pos": [
+        5054.699710429647,
+        -885.0098690169946
+      ],
+      "size": [
+        270,
+        99.625
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 584
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            573
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PatchFlashAttentionKJ"
+      },
+      "widgets_values": [
+        false
+      ]
+    },
+    {
+      "id": 328,
+      "type": "LyingSigmaSampler",
+      "pos": [
+        7351.278396128649,
+        192.67649198755203
+      ],
+      "size": [
+        270,
+        167.578125
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "sampler",
+          "type": "SAMPLER",
+          "link": 577
+        }
+      ],
+      "outputs": [
+        {
+          "name": "SAMPLER",
+          "type": "SAMPLER",
+          "links": [
+            578
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LyingSigmaSampler"
+      },
+      "widgets_values": [
+        -0.02,
+        0.28,
+        0.95
+      ]
+    },
+    {
+      "id": 329,
+      "type": "ExtendIntermediateSigmas",
+      "pos": [
+        7350.377216061997,
+        450.2796307565013
+      ],
+      "size": [
+        276.140625,
+        175.578125
+      ],
+      "flags": {},
+      "order": 32,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "sigmas",
+          "type": "SIGMAS",
+          "link": 608
+        }
+      ],
+      "outputs": [
+        {
+          "name": "SIGMAS",
+          "type": "SIGMAS",
+          "links": [
+            610
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ExtendIntermediateSigmas"
+      },
+      "widgets_values": [
+        2,
+        1,
+        0.98,
+        "linear"
+      ]
+    },
+    {
+      "id": 330,
+      "type": "TCFG",
+      "pos": [
+        6657.898796848597,
+        -273.72027984563374
+      ],
+      "size": [
+        225,
+        47.640625
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 585
+        }
+      ],
+      "outputs": [
+        {
+          "name": "patched_model",
+          "type": "MODEL",
+          "links": [
+            582
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TCFG"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 331,
+      "type": "Ideogram4PromptBuilderKJ",
+      "pos": [
+        6554.4916191623415,
+        1592.4357055261548
+      ],
+      "size": [
+        567,
+        414
+      ],
+      "flags": {},
+      "order": 25,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 588
+        },
+        {
+          "name": "import_json",
+          "shape": 7,
+          "type": "STRING",
+          "link": 659
+        },
+        {
+          "name": "bboxes",
+          "shape": 7,
+          "type": "BOUNDING_BOX",
+          "link": null
+        },
+        {
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": 589
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": 590
+        }
+      ],
+      "outputs": [
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "links": [
+            591
+          ]
+        },
+        {
+          "name": "preview",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "bboxes",
+          "type": "BOUNDING_BOX",
+          "links": null
+        },
+        {
+          "name": "width",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Ideogram4PromptBuilderKJ",
+        "dockPinned": true,
+        "dockGraph": {
+          "x": 3879.069214462385,
+          "y": -1852.0414142421948,
+          "w": 885,
+          "h": 1161
+        },
+        "docked": true,
+        "dockMin": false
+      },
+      "widgets_values": [
+        288,
+        128,
+        "A compact horizontal workplace safety illustration showing a steel plant worker continuing operation at a control console while a dangerous converter process is active. Preserve the original composition, character placement, machinery arrangement, and visual style. This is a small narrative illustration for a Chinese industrial safety poster, with no text inside the image.",
+        "A wide horizontal illustration panel with rounded corners. The interior is a simplified steelmaking workshop rendered in pale blue-gray tones. The background contains gray pipes, railings, and structural elements. The environment is compact, clean, and easy to read, using the same cool industrial palette and flat cel-shaded treatment as the companion converter leak illustration. No text, symbols, labels, logos, or decorative borders inside the scene.",
+        "art_style",
+        "digital cartoon workplace safety illustration, thick dark navy-gray outlines with consistent line weight, smooth cel shading, simplified industrial geometry, restrained environmental detail, expressive but natural worker reactions, small narrative scene, more detailed than an icon but simpler than a technical diagram, matching a companion illustration of a steel plant water-leak incident beside a converter, non-photorealistic",
+        "clean, educational, compact, readable, contextual, orderly",
+        "bright even indoor industrial illustration lighting, soft controlled shadows, clear contrast, warm orange furnace glow",
+        "graphic_design",
+        "[\"#E8EEF3\",\"#FFFFFF\",\"#5B6675\",\"#2E6FA3\",\"#F2C14B\",\"#D94A34\",\"#F28C28\",\"#B8C3CE\",\"#3E4A59\",\"#8AA0B5\"]",
+        "[{\"type\":\"obj\",\"text\":\"\",\"desc\":\"The complete horizontal safety-poster illustration contained inside a rounded rectangular frame. Preserve a wide panoramic composition approximately two and a half times wider than it is tall.\",\"palette\":[],\"x\":0,\"y\":0,\"w\":1,\"h\":1},{\"type\":\"obj\",\"text\":\"\",\"desc\":\"A male steel plant worker positioned on the left half of the image. He wears a yellow safety helmet and a blue work uniform. He is shown in side profile, seated or leaning forward at a control console. One hand rests on or presses the control panel as he continues operating the equipment. He looks toward the right with an alert and slightly concerned expression, mouth slightly open. Show him from approximately the waist up.\",\"palette\":[],\"x\":0.02,\"y\":0.04,\"w\":0.96,\"h\":0.58},{\"type\":\"obj\",\"text\":\"\",\"desc\":\"A blue-gray control console in the foreground between the worker and the furnace. The console has several rectangular control pads or buttons in muted green and gray tones. A prominent red warning beacon sits on top of the console and is clearly visible, suggesting a warning condition while operation continues.\",\"palette\":[],\"x\":0.18,\"y\":0.42,\"w\":0.44,\"h\":0.34},{\"type\":\"obj\",\"text\":\"\",\"desc\":\"A large gray steel converter occupying the right side and cropped by the frame. Its heavy cylindrical upper body, circular mouth rim, bolts, joints, and support components are simplified but recognizable. Bright orange flames rise from the open top, with a pale warm glow inside the mouth. Use the same thick outlines, muted gray metal, and smooth cel shading as the companion water-leak panel.\",\"palette\":[],\"x\":0.02,\"y\":0.52,\"w\":0.96,\"h\":0.48},{\"type\":\"obj\",\"text\":\"\",\"desc\":\"Supporting steel workshop environment in the background. Include simplified gray pipes, railings, structural supports, and industrial machinery connecting the worker's control area to the converter area. These details should remain secondary and uncluttered, helping the image feel like a real steel plant scene rather than an isolated icon.\",\"palette\":[],\"x\":0,\"y\":0.08,\"w\":0.42,\"h\":0.88}]",
+        25,
+        "always",
+        "compact",
+        ""
+      ],
+      "ideo": {
+        "boxes": [
+          {
+            "type": "obj",
+            "text": "",
+            "desc": "The complete horizontal safety-poster illustration contained inside a rounded rectangular frame. Preserve a wide panoramic composition approximately two and a half times wider than it is tall.",
+            "palette": [],
+            "x": 0,
+            "y": 0,
+            "w": 1,
+            "h": 1
+          },
+          {
+            "type": "obj",
+            "text": "",
+            "desc": "A male steel plant worker positioned on the left half of the image. He wears a yellow safety helmet and a blue work uniform. He is shown in side profile, seated or leaning forward at a control console. One hand rests on or presses the control panel as he continues operating the equipment. He looks toward the right with an alert and slightly concerned expression, mouth slightly open. Show him from approximately the waist up.",
+            "palette": [],
+            "x": 0.02,
+            "y": 0.04,
+            "w": 0.96,
+            "h": 0.58
+          },
+          {
+            "type": "obj",
+            "text": "",
+            "desc": "A blue-gray control console in the foreground between the worker and the furnace. The console has several rectangular control pads or buttons in muted green and gray tones. A prominent red warning beacon sits on top of the console and is clearly visible, suggesting a warning condition while operation continues.",
+            "palette": [],
+            "x": 0.18,
+            "y": 0.42,
+            "w": 0.44,
+            "h": 0.34
+          },
+          {
+            "type": "obj",
+            "text": "",
+            "desc": "A large gray steel converter occupying the right side and cropped by the frame. Its heavy cylindrical upper body, circular mouth rim, bolts, joints, and support components are simplified but recognizable. Bright orange flames rise from the open top, with a pale warm glow inside the mouth. Use the same thick outlines, muted gray metal, and smooth cel shading as the companion water-leak panel.",
+            "palette": [],
+            "x": 0.02,
+            "y": 0.52,
+            "w": 0.96,
+            "h": 0.48
+          },
+          {
+            "type": "obj",
+            "text": "",
+            "desc": "Supporting steel workshop environment in the background. Include simplified gray pipes, railings, structural supports, and industrial machinery connecting the worker's control area to the converter area. These details should remain secondary and uncluttered, helping the image feel like a real steel plant scene rather than an isolated icon.",
+            "palette": [],
+            "x": 0,
+            "y": 0.08,
+            "w": 0.42,
+            "h": 0.88
+          }
+        ],
+        "palette": [
+          "#E8EEF3",
+          "#FFFFFF",
+          "#5B6675",
+          "#2E6FA3",
+          "#F2C14B",
+          "#D94A34",
+          "#F28C28",
+          "#B8C3CE",
+          "#3E4A59",
+          "#8AA0B5"
+        ],
+        "importMode": "always",
+        "outputFormat": "compact",
+        "dock": {
+          "pinned": true,
+          "graph": {
+            "x": 3879.069214462385,
+            "y": -1852.0414142421948,
+            "w": 885,
+            "h": 1161
+          },
+          "panelH": 150,
+          "min": false
+        }
+      }
+    },
+    {
+      "id": 332,
+      "type": "Image Blank",
+      "pos": [
+        3760.8332581268746,
+        887.9499447857482
+      ],
+      "size": [
+        270,
+        231.546875
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "widget": {
+            "name": "width"
+          },
+          "link": 651
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "widget": {
+            "name": "height"
+          },
+          "link": 652
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            586
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Image Blank"
+      },
+      "widgets_values": [
+        289,
+        128,
+        255,
+        255,
+        255
+      ]
+    },
+    {
+      "id": 333,
+      "type": "PreviewAny",
+      "pos": [
+        4784.110306413653,
+        1176.8607352615936
+      ],
+      "size": [
+        476.296875,
+        389.671875
+      ],
+      "flags": {},
+      "order": 31,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "source",
+          "type": "*",
+          "link": 591
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            594
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PreviewAny"
+      },
+      "widgets_values": [
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "id": 334,
+      "type": "easy positive",
+      "pos": [
+        3566.027771558449,
+        1601.0655120774318
+      ],
+      "size": [
+        976.953125,
+        694.703125
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "positive",
+          "type": "STRING",
+          "widget": {
+            "name": "positive"
+          },
+          "link": 657
+        }
+      ],
+      "outputs": [
+        {
+          "name": "positive",
+          "type": "STRING",
+          "links": [
+            659
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "easy positive"
+      },
+      "widgets_values": [
+        ""
+      ],
+      "color": "#232",
+      "bgcolor": "#353"
+    },
+    {
+      "id": 336,
+      "type": "CFGOverride",
+      "pos": [
+        6878.645399679506,
+        -628.7998058215898
+      ],
+      "size": [
+        271.5,
+        175.3125
+      ],
+      "flags": {},
+      "order": 28,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 604
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            598
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "CFGOverride",
+        "cnr_id": "comfy-core",
+        "ver": "0.23.0",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "version": "7.8",
+          "input_ue_unconnectable": {}
+        },
+        "enableTabs": false,
+        "tabWidth": 65,
+        "tabXOffset": 10,
+        "hasSecondTab": false,
+        "secondTabText": "Send Back",
+        "secondTabOffset": 80,
+        "secondTabWidth": 65
+      },
+      "widgets_values": [
+        3.5,
+        0.8,
+        1
+      ]
+    },
+    {
+      "id": 337,
+      "type": "Switch any [Crystools]",
+      "pos": [
+        7271.6961451919515,
+        -742.379235543209
+      ],
+      "size": [
+        270,
+        123.625
+      ],
+      "flags": {},
+      "order": 33,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "on_true",
+          "type": "*",
+          "link": 597
+        },
+        {
+          "name": "on_false",
+          "type": "*",
+          "link": 598
+        },
+        {
+          "name": "boolean",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "boolean"
+          },
+          "link": 620
+        }
+      ],
+      "outputs": [
+        {
+          "name": "*",
+          "type": "*",
+          "links": [
+            601
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Switch any [Crystools]"
+      },
+      "widgets_values": [
+        false
+      ]
+    },
+    {
+      "id": 338,
+      "type": "Switch any [Crystools]",
+      "pos": [
+        7067.317834085912,
+        -375.39163951790533
+      ],
+      "size": [
+        270,
+        123.625
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "on_true",
+          "type": "*",
+          "link": 613
+        },
+        {
+          "name": "on_false",
+          "type": "*",
+          "link": 614
+        },
+        {
+          "name": "boolean",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "boolean"
+          },
+          "link": 619
+        }
+      ],
+      "outputs": [
+        {
+          "name": "*",
+          "type": "*",
+          "links": [
+            603
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Switch any [Crystools]"
+      },
+      "widgets_values": [
+        false
+      ]
+    },
+    {
+      "id": 339,
+      "type": "BasicScheduler",
+      "pos": [
+        6332.081628995856,
+        338.365942589498
+      ],
+      "size": [
+        271.5,
+        143.59375
+      ],
+      "flags": {},
+      "order": 29,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 605
+        }
+      ],
+      "outputs": [
+        {
+          "name": "SIGMAS",
+          "type": "SIGMAS",
+          "links": [
+            609
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "BasicScheduler",
+        "cnr_id": "comfy-core",
+        "ver": "0.24.0",
+        "ue_properties": {
+          "widget_ue_connectable": {},
+          "input_ue_unconnectable": {},
+          "version": "7.8"
+        }
+      },
+      "widgets_values": [
+        "normal",
+        45,
+        1
+      ]
+    },
+    {
+      "id": 341,
+      "type": "ExtendIntermediateSigmas",
+      "pos": [
+        7355.498732176837,
+        725.8934359463453
+      ],
+      "size": [
+        276.125,
+        175.578125
+      ],
+      "flags": {},
+      "order": 34,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "sigmas",
+          "type": "SIGMAS",
+          "link": 609
+        }
+      ],
+      "outputs": [
+        {
+          "name": "SIGMAS",
+          "type": "SIGMAS",
+          "links": [
+            611
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ExtendIntermediateSigmas"
+      },
+      "widgets_values": [
+        2,
+        1,
+        0.98,
+        "linear"
+      ]
+    },
+    {
+      "id": 342,
+      "type": "Switch any [Crystools]",
+      "pos": [
+        7842.018505904868,
+        399.6046037731164
+      ],
+      "size": [
+        270,
+        123.625
+      ],
+      "flags": {},
+      "order": 37,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "on_true",
+          "type": "*",
+          "link": 610
+        },
+        {
+          "name": "on_false",
+          "type": "*",
+          "link": 611
+        },
+        {
+          "name": "boolean",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "boolean"
+          },
+          "link": 621
+        }
+      ],
+      "outputs": [
+        {
+          "name": "*",
+          "type": "*",
+          "links": [
+            612
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Switch any [Crystools]"
+      },
+      "widgets_values": [
+        false
+      ]
+    },
+    {
+      "id": 343,
+      "type": "PrimitiveFloat",
+      "pos": [
+        6199.390362878514,
+        -655.2034738788388
+      ],
+      "size": [
+        270,
+        79.625
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "FLOAT",
+          "type": "FLOAT",
+          "links": [
+            613
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PrimitiveFloat"
+      },
+      "widgets_values": [
+        3
+      ]
+    },
+    {
+      "id": 344,
+      "type": "PrimitiveFloat",
+      "pos": [
+        6201.835612173637,
+        -513.7122769647709
+      ],
+      "size": [
+        270,
+        79.625
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "FLOAT",
+          "type": "FLOAT",
+          "links": [
+            614
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PrimitiveFloat"
+      },
+      "widgets_values": [
+        4.5
+      ]
+    },
+    {
+      "id": 350,
+      "type": "PrimitiveBoolean",
+      "pos": [
+        3662.5583576620256,
+        348.4547824147836
+      ],
+      "size": [
+        270,
+        75.625
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "value",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "value"
+          },
+          "link": 650
+        }
+      ],
+      "outputs": [
+        {
+          "name": "BOOLEAN",
+          "type": "BOOLEAN",
+          "links": [
+            619,
+            620,
+            621
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PrimitiveBoolean"
+      },
+      "widgets_values": [
+        false
+      ]
+    },
+    {
+      "id": 357,
+      "type": "RandomNoise //Inspire",
+      "pos": [
+        6538.9181549396035,
+        -1763.1630785753653
+      ],
+      "size": [
+        484.1875,
+        311.0625
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "noise_seed",
+          "type": "INT",
+          "widget": {
+            "name": "noise_seed"
+          },
+          "link": 649
+        }
+      ],
+      "outputs": [
+        {
+          "name": "NOISE",
+          "type": "NOISE",
+          "links": [
+            629
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "RandomNoise //Inspire"
+      },
+      "widgets_values": [
+        0,
+        "fixed",
+        "GPU(=A1111)",
+        "comfy",
+        0,
+        0,
+        "linear",
+        0
+      ]
+    },
+    {
+      "id": 360,
+      "type": "Gen2_InputPanel",
+      "pos": [
+        1565.168688655435,
+        111.63265361051326
+      ],
+      "size": [
+        1260.484375,
+        467.5
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "label": "panel_link",
+          "name": "PANEL_LINK",
+          "type": "*",
+          "links": [
+            655
+          ]
+        },
+        {
+          "label": "seed",
+          "name": "param_0",
+          "type": "INT",
+          "links": [
+            649
+          ]
+        },
+        {
+          "label": "modeSpeed",
+          "name": "param_1",
+          "type": "BOOLEAN",
+          "links": [
+            650
+          ]
+        },
+        {
+          "label": "width",
+          "name": "param_2",
+          "type": "INT",
+          "links": [
+            651
+          ]
+        },
+        {
+          "label": "height",
+          "name": "param_3",
+          "type": "INT",
+          "links": [
+            652
+          ]
+        },
+        {
+          "label": "prompt",
+          "name": "param_4",
+          "type": "STRING",
+          "links": [
+            657
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Gen2_InputPanel",
+        "gen2RuntimeValues": {
+          "b89919dc-68be-494b-bd11-230c0a7bf978": 8784484449863653,
+          "1ca404db-c84b-4de1-b683-f20789f64458": true,
+          "f566fd24-eb0e-4d4d-8fa3-2c8915d9c4d8": 289,
+          "2fbc3f49-95c2-4a3e-8860-a046317667d7": 128,
+          "85765045-ce5a-45fc-8e42-376baa52c395": "{\"high_level_description\":\"A compact horizontal workplace safety illustration showing a steel plant worker continuing operation at a control console while a dangerous converter process is active. Preserve the original composition, character placement, machinery arrangement, and visual style. This is a small narrative illustration for a Chinese industrial safety poster, with no text inside the image.\",\"style_description\":{\"aesthetics\":\"clean, educational, compact, readable, contextual, orderly\",\"lighting\":\"bright even indoor industrial illustration lighting, soft controlled shadows, clear contrast, warm orange furnace glow\",\"medium\":\"graphic_design\",\"art_style\":\"digital cartoon workplace safety illustration, thick dark navy-gray outlines with consistent line weight, smooth cel shading, simplified industrial geometry, restrained environmental detail, expressive but natural worker reactions, small narrative scene, more detailed than an icon but simpler than a technical diagram, matching a companion illustration of a steel plant water-leak incident beside a converter, non-photorealistic\",\"color_palette\":[\"#E8EEF3\",\"#FFFFFF\",\"#5B6675\",\"#2E6FA3\",\"#F2C14B\",\"#D94A34\",\"#F28C28\",\"#B8C3CE\",\"#3E4A59\",\"#8AA0B5\"]},\"compositional_deconstruction\":{\"background\":\"A wide horizontal illustration panel with rounded corners. The interior is a simplified steelmaking workshop rendered in pale blue-gray tones. The background contains gray pipes, railings, and structural elements. The environment is compact, clean, and easy to read, using the same cool industrial palette and flat cel-shaded treatment as the companion converter leak illustration. No text, symbols, labels, logos, or decorative borders inside the scene.\",\"elements\":[{\"type\":\"obj\",\"bbox\":[0,0,1000,1000],\"desc\":\"The complete horizontal safety-poster illustration contained inside a rounded rectangular frame. Preserve a wide panoramic composition approximately two and a half times wider than it is tall.\"},{\"type\":\"obj\",\"bbox\":[40,20,620,980],\"desc\":\"A male steel plant worker positioned on the left half of the image. He wears a yellow safety helmet and a blue work uniform. He is shown in side profile, seated or leaning forward at a control console. One hand rests on or presses the control panel as he continues operating the equipment. He looks toward the right with an alert and slightly concerned expression, mouth slightly open. Show him from approximately the waist up.\"},{\"type\":\"obj\",\"bbox\":[420,180,760,620],\"desc\":\"A blue-gray control console in the foreground between the worker and the furnace. The console has several rectangular control pads or buttons in muted green and gray tones. A prominent red warning beacon sits on top of the console and is clearly visible, suggesting a warning condition while operation continues.\"},{\"type\":\"obj\",\"bbox\":[520,20,1000,980],\"desc\":\"A large gray steel converter occupying the right side and cropped by the frame. Its heavy cylindrical upper body, circular mouth rim, bolts, joints, and support components are simplified but recognizable. Bright orange flames rise from the open top, with a pale warm glow inside the mouth. Use the same thick outlines, muted gray metal, and smooth cel shading as the companion water-leak panel.\"},{\"type\":\"obj\",\"bbox\":[80,0,960,420],\"desc\":\"Supporting steel workshop environment in the background. Include simplified gray pipes, railings, structural supports, and industrial machinery connecting the worker's control area to the converter area. These details should remain secondary and uncluttered, helping the image feel like a real steel plant scene rather than an isolated icon.\"}]}}"
+        },
+        "gen2RuntimeControlModes": {
+          "b89919dc-68be-494b-bd11-230c0a7bf978": "randomize"
+        }
+      },
+      "widgets_values": [
+        "[{\"id\":\"b89919dc-68be-494b-bd11-230c0a7bf978\",\"name\":\"seed\",\"type\":\"SEED\",\"default\":0,\"min\":0,\"max\":9007199254740991,\"step\":1,\"controlMode\":\"fixed\"},{\"id\":\"1ca404db-c84b-4de1-b683-f20789f64458\",\"name\":\"modeSpeed\",\"type\":\"BOOLEAN\",\"default\":false},{\"id\":\"f566fd24-eb0e-4d4d-8fa3-2c8915d9c4d8\",\"name\":\"width\",\"type\":\"INT\",\"default\":1024,\"min\":0,\"max\":2560,\"step\":1},{\"id\":\"2fbc3f49-95c2-4a3e-8860-a046317667d7\",\"name\":\"height\",\"type\":\"INT\",\"default\":1024,\"min\":0,\"max\":2560,\"step\":1},{\"id\":\"85765045-ce5a-45fc-8e42-376baa52c395\",\"name\":\"prompt\",\"type\":\"STRING\",\"default\":\"A cat.\"}]",
+        "",
+        8784484449863653,
+        "randomize",
+        true,
+        289,
+        128,
+        "{\"high_level_description\":\"A compact horizontal workplace safety illustration showing a steel plant worker continuing operation at a control console while a dangerous converter process is active. Preserve the original composition, character placement, machinery arrangement, and visual style. This is a small narrative illustration for a Chinese industrial safety poster, with no text inside the image.\",\"style_description\":{\"aesthetics\":\"clean, educational, compact, readable, contextual, orderly\",\"lighting\":\"bright even indoor industrial illustration lighting, soft controlled shadows, clear contrast, warm orange furnace glow\",\"medium\":\"graphic_design\",\"art_style\":\"digital cartoon workplace safety illustration, thick dark navy-gray outlines with consistent line weight, smooth cel shading, simplified industrial geometry, restrained environmental detail, expressive but natural worker reactions, small narrative scene, more detailed than an icon but simpler than a technical diagram, matching a companion illustration of a steel plant water-leak incident beside a converter, non-photorealistic\",\"color_palette\":[\"#E8EEF3\",\"#FFFFFF\",\"#5B6675\",\"#2E6FA3\",\"#F2C14B\",\"#D94A34\",\"#F28C28\",\"#B8C3CE\",\"#3E4A59\",\"#8AA0B5\"]},\"compositional_deconstruction\":{\"background\":\"A wide horizontal illustration panel with rounded corners. The interior is a simplified steelmaking workshop rendered in pale blue-gray tones. The background contains gray pipes, railings, and structural elements. The environment is compact, clean, and easy to read, using the same cool industrial palette and flat cel-shaded treatment as the companion converter leak illustration. No text, symbols, labels, logos, or decorative borders inside the scene.\",\"elements\":[{\"type\":\"obj\",\"bbox\":[0,0,1000,1000],\"desc\":\"The complete horizontal safety-poster illustration contained inside a rounded rectangular frame. Preserve a wide panoramic composition approximately two and a half times wider than it is tall.\"},{\"type\":\"obj\",\"bbox\":[40,20,620,980],\"desc\":\"A male steel plant worker positioned on the left half of the image. He wears a yellow safety helmet and a blue work uniform. He is shown in side profile, seated or leaning forward at a control console. One hand rests on or presses the control panel as he continues operating the equipment. He looks toward the right with an alert and slightly concerned expression, mouth slightly open. Show him from approximately the waist up.\"},{\"type\":\"obj\",\"bbox\":[420,180,760,620],\"desc\":\"A blue-gray control console in the foreground between the worker and the furnace. The console has several rectangular control pads or buttons in muted green and gray tones. A prominent red warning beacon sits on top of the console and is clearly visible, suggesting a warning condition while operation continues.\"},{\"type\":\"obj\",\"bbox\":[520,20,1000,980],\"desc\":\"A large gray steel converter occupying the right side and cropped by the frame. Its heavy cylindrical upper body, circular mouth rim, bolts, joints, and support components are simplified but recognizable. Bright orange flames rise from the open top, with a pale warm glow inside the mouth. Use the same thick outlines, muted gray metal, and smooth cel shading as the companion water-leak panel.\"},{\"type\":\"obj\",\"bbox\":[80,0,960,420],\"desc\":\"Supporting steel workshop environment in the background. Include simplified gray pipes, railings, structural supports, and industrial machinery connecting the worker's control area to the converter area. These details should remain secondary and uncluttered, helping the image feel like a real steel plant scene rather than an isolated icon.\"}]}}",
+        ""
+      ]
+    },
+    {
+      "id": 361,
+      "type": "Gen2_OutputPanel",
+      "pos": [
+        11851.859508739568,
+        -240.36646274602094
+      ],
+      "size": [
+        1701.484375,
+        317.140625
+      ],
+      "flags": {},
+      "order": 44,
+      "mode": 0,
+      "inputs": [
+        {
+          "label": "panel_link",
+          "name": "PANEL_LINK",
+          "type": "*",
+          "link": 655
+        },
+        {
+          "label": "imageOutput1Url",
+          "name": "param_0",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 656
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "Gen2_OutputPanel",
+        "gen2RuntimeValues": {},
+        "gen2RuntimeControlModes": {}
+      },
+      "widgets_values": [
+        "[{\"id\":\"4fa70fc9-7a7c-4966-91ed-c16368a4eafb\",\"name\":\"imageOutput1Url\",\"type\":\"IMAGE\"}]",
+        "",
+        ""
+      ]
+    }
+  ],
+  "links": [
+    [
+      230,
+      160,
+      0,
+      161,
+      4,
+      "LATENT"
+    ],
+    [
+      232,
+      158,
+      0,
+      162,
+      1,
+      "VAE"
+    ],
+    [
+      238,
+      162,
+      0,
+      25,
+      0,
+      "IMAGE"
+    ],
+    [
+      254,
+      182,
+      0,
+      161,
+      1,
+      "GUIDER"
+    ],
+    [
+      279,
+      168,
+      0,
+      167,
+      0,
+      "CLIP"
+    ],
+    [
+      448,
+      283,
+      0,
+      277,
+      0,
+      "IMAGE"
+    ],
+    [
+      449,
+      281,
+      0,
+      278,
+      0,
+      "BOOLEAN"
+    ],
+    [
+      450,
+      279,
+      2,
+      278,
+      1,
+      "FLOAT"
+    ],
+    [
+      451,
+      279,
+      3,
+      278,
+      2,
+      "FLOAT"
+    ],
+    [
+      452,
+      283,
+      0,
+      279,
+      0,
+      "IMAGE"
+    ],
+    [
+      453,
+      277,
+      2,
+      280,
+      0,
+      "NUMBER"
+    ],
+    [
+      454,
+      280,
+      0,
+      281,
+      0,
+      "INT"
+    ],
+    [
+      455,
+      282,
+      0,
+      281,
+      1,
+      "INT"
+    ],
+    [
+      456,
+      284,
+      0,
+      283,
+      0,
+      "IMAGE"
+    ],
+    [
+      458,
+      278,
+      0,
+      160,
+      0,
+      "INT"
+    ],
+    [
+      459,
+      278,
+      1,
+      160,
+      1,
+      "INT"
+    ],
+    [
+      524,
+      161,
+      0,
+      162,
+      0,
+      "LATENT"
+    ],
+    [
+      557,
+      321,
+      0,
+      198,
+      0,
+      "MODEL"
+    ],
+    [
+      569,
+      168,
+      0,
+      325,
+      0,
+      "CLIP"
+    ],
+    [
+      573,
+      327,
+      0,
+      326,
+      0,
+      "MODEL"
+    ],
+    [
+      574,
+      326,
+      0,
+      321,
+      0,
+      "MODEL"
+    ],
+    [
+      575,
+      198,
+      0,
+      184,
+      0,
+      "MODEL"
+    ],
+    [
+      576,
+      198,
+      0,
+      190,
+      0,
+      "MODEL"
+    ],
+    [
+      577,
+      163,
+      0,
+      328,
+      0,
+      "SAMPLER"
+    ],
+    [
+      578,
+      328,
+      0,
+      161,
+      2,
+      "SAMPLER"
+    ],
+    [
+      582,
+      330,
+      0,
+      182,
+      2,
+      "MODEL"
+    ],
+    [
+      584,
+      268,
+      0,
+      327,
+      0,
+      "MODEL"
+    ],
+    [
+      585,
+      267,
+      0,
+      330,
+      0,
+      "MODEL"
+    ],
+    [
+      586,
+      332,
+      0,
+      284,
+      0,
+      "IMAGE"
+    ],
+    [
+      588,
+      283,
+      0,
+      331,
+      0,
+      "IMAGE"
+    ],
+    [
+      589,
+      284,
+      1,
+      331,
+      3,
+      "INT"
+    ],
+    [
+      590,
+      284,
+      2,
+      331,
+      4,
+      "INT"
+    ],
+    [
+      591,
+      331,
+      0,
+      333,
+      0,
+      "STRING"
+    ],
+    [
+      594,
+      333,
+      0,
+      167,
+      1,
+      "STRING"
+    ],
+    [
+      597,
+      184,
+      0,
+      337,
+      0,
+      "MODEL"
+    ],
+    [
+      598,
+      336,
+      0,
+      337,
+      1,
+      "MODEL"
+    ],
+    [
+      601,
+      337,
+      0,
+      182,
+      0,
+      "MODEL"
+    ],
+    [
+      602,
+      167,
+      0,
+      182,
+      1,
+      "CONDITIONING"
+    ],
+    [
+      603,
+      338,
+      0,
+      182,
+      4,
+      "FLOAT"
+    ],
+    [
+      604,
+      198,
+      0,
+      336,
+      0,
+      "MODEL"
+    ],
+    [
+      605,
+      198,
+      0,
+      339,
+      0,
+      "MODEL"
+    ],
+    [
+      608,
+      190,
+      0,
+      329,
+      0,
+      "SIGMAS"
+    ],
+    [
+      609,
+      339,
+      0,
+      341,
+      0,
+      "SIGMAS"
+    ],
+    [
+      610,
+      329,
+      0,
+      342,
+      0,
+      "SIGMAS"
+    ],
+    [
+      611,
+      341,
+      0,
+      342,
+      1,
+      "SIGMAS"
+    ],
+    [
+      612,
+      342,
+      0,
+      161,
+      3,
+      "SIGMAS"
+    ],
+    [
+      613,
+      343,
+      0,
+      338,
+      0,
+      "FLOAT"
+    ],
+    [
+      614,
+      344,
+      0,
+      338,
+      1,
+      "FLOAT"
+    ],
+    [
+      619,
+      350,
+      0,
+      338,
+      2,
+      "BOOLEAN"
+    ],
+    [
+      620,
+      350,
+      0,
+      337,
+      2,
+      "BOOLEAN"
+    ],
+    [
+      621,
+      350,
+      0,
+      342,
+      2,
+      "BOOLEAN"
+    ],
+    [
+      622,
+      325,
+      0,
+      182,
+      3,
+      "CONDITIONING"
+    ],
+    [
+      629,
+      357,
+      0,
+      161,
+      0,
+      "NOISE"
+    ],
+    [
+      649,
+      360,
+      1,
+      357,
+      0,
+      "INT"
+    ],
+    [
+      650,
+      360,
+      2,
+      350,
+      0,
+      "BOOLEAN"
+    ],
+    [
+      651,
+      360,
+      3,
+      332,
+      0,
+      "INT"
+    ],
+    [
+      652,
+      360,
+      4,
+      332,
+      1,
+      "INT"
+    ],
+    [
+      655,
+      360,
+      0,
+      361,
+      0,
+      "*"
+    ],
+    [
+      656,
+      25,
+      0,
+      361,
+      1,
+      "IMAGE"
+    ],
+    [
+      657,
+      360,
+      5,
+      334,
+      0,
+      "STRING"
+    ],
+    [
+      659,
+      334,
+      0,
+      331,
+      1,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.32349184307609385,
+      "offset": [
+        -936.237507154884,
+        1115.9708488011743
+      ]
+    },
+    "frontendVersion": "1.45.19",
+    "VHS_latentpreview": true,
+    "VHS_latentpreviewrate": 0,
+    "VHS_MetadataImage": true,
+    "VHS_KeepIntermediate": true,
+    "ue_links": [],
+    "links_added_by_ue": []
+  },
+  "version": 0.4
+}

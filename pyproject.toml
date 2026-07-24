@@ -1,7 +1,7 @@
 [project]
 name = "gen2"
-description = "A general-purpose ComfyUI custom node pack: model-compatibility/sampling fixes (e.g. Flux.2 klein), tile-based workflow nodes, QoL utilities, and a (legacy) QwenImage ControlNet pipeline."
-version = "2.4.8"
+description = "A general-purpose ComfyUI custom node pack with native-style Flux.2 Fun ControlNet, model-compatibility fixes, tiling workflows, and QoL utilities."
+version = "2.5.0"
 license = {file = "LICENSE"} 
 # classifiers = [
 #     # For OS-independent nodes (works on all operating systems)
@@ -32,5 +32,5 @@ PublisherId = "petmycat"
 DisplayName = "ComfyUI-gen2"
 Icon = ""
 includes = [] 
-"requires-comfyui" = ">=0.10.0"  # accept_all_inputs (V3 API) needs >=0.10.0; tested up to 0.26.0
+"requires-comfyui" = ">=0.28.0"  # Flux.2 Fun integration targets the v0.28.0 patching and reference-modulation APIs
 

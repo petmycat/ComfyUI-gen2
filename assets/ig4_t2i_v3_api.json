@@ -1,0 +1,669 @@
+{
+  "25": {
+    "inputs": {
+      "images": [
+        "162",
+        0
+      ]
+    },
+    "class_type": "PreviewImage",
+    "_meta": {
+      "title": "Preview Image"
+    }
+  },
+  "158": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "160": {
+    "inputs": {
+      "width": [
+        "278",
+        0
+      ],
+      "height": [
+        "278",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "Empty Flux 2 Latent"
+    }
+  },
+  "161": {
+    "inputs": {
+      "noise": [
+        "357",
+        0
+      ],
+      "guider": [
+        "182",
+        0
+      ],
+      "sampler": [
+        "328",
+        0
+      ],
+      "sigmas": [
+        "342",
+        0
+      ],
+      "latent_image": [
+        "160",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "162": {
+    "inputs": {
+      "samples": [
+        "161",
+        0
+      ],
+      "vae": [
+        "158",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "163": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "167": {
+    "inputs": {
+      "text": [
+        "333",
+        0
+      ],
+      "clip": [
+        "168",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "168": {
+    "inputs": {
+      "clip_name": "qwen3vl_8b_fp8_scaled.safetensors",
+      "type": "ideogram4",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "182": {
+    "inputs": {
+      "cfg": [
+        "338",
+        0
+      ],
+      "model": [
+        "337",
+        0
+      ],
+      "positive": [
+        "167",
+        0
+      ],
+      "model_negative": [
+        "330",
+        0
+      ],
+      "negative": [
+        "325",
+        0
+      ]
+    },
+    "class_type": "DualModelGuider",
+    "_meta": {
+      "title": "Dual Model CFG Guider"
+    }
+  },
+  "184": {
+    "inputs": {
+      "cfg": 1,
+      "start_percent": 0.9,
+      "end_percent": 1,
+      "model": [
+        "198",
+        0
+      ]
+    },
+    "class_type": "CFGOverride",
+    "_meta": {
+      "title": "CFG Override"
+    }
+  },
+  "190": {
+    "inputs": {
+      "scheduler": "normal",
+      "steps": 14,
+      "denoise": 1,
+      "model": [
+        "198",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "BasicScheduler"
+    }
+  },
+  "198": {
+    "inputs": {
+      "shift": 3,
+      "model": [
+        "321",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingAuraFlow",
+    "_meta": {
+      "title": "ModelSamplingAuraFlow"
+    }
+  },
+  "267": {
+    "inputs": {
+      "unet_name": "ideogram4_unconditional_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "268": {
+    "inputs": {
+      "unet_name": "ideogram4_fp8_scaled.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "277": {
+    "inputs": {
+      "image": [
+        "284",
+        0
+      ]
+    },
+    "class_type": "Image Aspect Ratio",
+    "_meta": {
+      "title": "Image Aspect Ratio"
+    }
+  },
+  "278": {
+    "inputs": {
+      "square_size": 2048,
+      "step": 16,
+      "landscape": [
+        "281",
+        0
+      ],
+      "aspect_a": [
+        "279",
+        2
+      ],
+      "aspect_b": [
+        "279",
+        3
+      ]
+    },
+    "class_type": "BestResolutionFromArea",
+    "_meta": {
+      "title": "Best-Res (area)"
+    }
+  },
+  "279": {
+    "inputs": {
+      "image": [
+        "284",
+        0
+      ]
+    },
+    "class_type": "easy imageRatio",
+    "_meta": {
+      "title": "ImageRatio"
+    }
+  },
+  "280": {
+    "inputs": {
+      "number": [
+        "277",
+        2
+      ]
+    },
+    "class_type": "Number to Int",
+    "_meta": {
+      "title": "Number to Int"
+    }
+  },
+  "281": {
+    "inputs": {
+      "comparison": "a == b",
+      "a": [
+        "280",
+        0
+      ],
+      "b": [
+        "282",
+        0
+      ]
+    },
+    "class_type": "easy compare",
+    "_meta": {
+      "title": "Compare"
+    }
+  },
+  "282": {
+    "inputs": {
+      "value": 1
+    },
+    "class_type": "easy int",
+    "_meta": {
+      "title": "Int"
+    }
+  },
+  "284": {
+    "inputs": {
+      "image": [
+        "332",
+        0
+      ]
+    },
+    "class_type": "GetImageSizeAndCount",
+    "_meta": {
+      "title": "Get Image Size & Count"
+    }
+  },
+  "321": {
+    "inputs": {
+      "chunk_ffn": true,
+      "ffn_chunks": 2,
+      "ffn_seq_threshold": 1024,
+      "bf16_rope": true,
+      "model": [
+        "326",
+        0
+      ]
+    },
+    "class_type": "Ideogram4OptimizationsKJ",
+    "_meta": {
+      "title": "Ideogram4 Optimizations KJ"
+    }
+  },
+  "325": {
+    "inputs": {
+      "text": "watermark",
+      "clip": [
+        "168",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "326": {
+    "inputs": {
+      "scaling_factor": 1.024,
+      "model": [
+        "327",
+        0
+      ]
+    },
+    "class_type": "Epsilon Scaling",
+    "_meta": {
+      "title": "Epsilon Scaling"
+    }
+  },
+  "327": {
+    "inputs": {
+      "allow_compile": false,
+      "model": [
+        "268",
+        0
+      ]
+    },
+    "class_type": "PatchFlashAttentionKJ",
+    "_meta": {
+      "title": "Patch Flash Attention KJ"
+    }
+  },
+  "328": {
+    "inputs": {
+      "dishonesty_factor": -0.02,
+      "start_percent": 0.28,
+      "end_percent": 0.95,
+      "sampler": [
+        "163",
+        0
+      ]
+    },
+    "class_type": "LyingSigmaSampler",
+    "_meta": {
+      "title": "Lying Sigma Sampler"
+    }
+  },
+  "329": {
+    "inputs": {
+      "steps": 2,
+      "start_at_sigma": 1,
+      "end_at_sigma": 0.98,
+      "spacing": "linear",
+      "sigmas": [
+        "190",
+        0
+      ]
+    },
+    "class_type": "ExtendIntermediateSigmas",
+    "_meta": {
+      "title": "ExtendIntermediateSigmas"
+    }
+  },
+  "330": {
+    "inputs": {
+      "model": [
+        "267",
+        0
+      ]
+    },
+    "class_type": "TCFG",
+    "_meta": {
+      "title": "Tangential Damping CFG"
+    }
+  },
+  "331": {
+    "inputs": {
+      "width": [
+        "284",
+        1
+      ],
+      "height": [
+        "284",
+        2
+      ],
+      "high_level_description": "A compact horizontal workplace safety illustration showing a steel plant worker continuing operation at a control console while a dangerous converter process is active. Preserve the original composition, character placement, machinery arrangement, and visual style. This is a small narrative illustration for a Chinese industrial safety poster, with no text inside the image.",
+      "background": "A wide horizontal illustration panel with rounded corners. The interior is a simplified steelmaking workshop rendered in pale blue-gray tones. The background contains gray pipes, railings, and structural elements. The environment is compact, clean, and easy to read, using the same cool industrial palette and flat cel-shaded treatment as the companion converter leak illustration. No text, symbols, labels, logos, or decorative borders inside the scene.",
+      "style": "art_style",
+      "style.art_style": "digital cartoon workplace safety illustration, thick dark navy-gray outlines with consistent line weight, smooth cel shading, simplified industrial geometry, restrained environmental detail, expressive but natural worker reactions, small narrative scene, more detailed than an icon but simpler than a technical diagram, matching a companion illustration of a steel plant water-leak incident beside a converter, non-photorealistic",
+      "aesthetics": "clean, educational, compact, readable, contextual, orderly",
+      "lighting": "bright even indoor industrial illustration lighting, soft controlled shadows, clear contrast, warm orange furnace glow",
+      "medium": "graphic_design",
+      "style_palette_data": "[\"#E8EEF3\",\"#FFFFFF\",\"#5B6675\",\"#2E6FA3\",\"#F2C14B\",\"#D94A34\",\"#F28C28\",\"#B8C3CE\",\"#3E4A59\",\"#8AA0B5\"]",
+      "elements_data": "{\"_refresh\":1}",
+      "bg_brightness": 25,
+      "import_mode": "always",
+      "output_format": "compact",
+      "image": [
+        "284",
+        0
+      ],
+      "import_json": [
+        "334",
+        0
+      ]
+    },
+    "class_type": "Ideogram4PromptBuilderKJ",
+    "_meta": {
+      "title": "Ideogram 4 Prompt Builder KJ"
+    }
+  },
+  "332": {
+    "inputs": {
+      "width": [
+        "360",
+        3
+      ],
+      "height": [
+        "360",
+        4
+      ],
+      "red": 255,
+      "green": 255,
+      "blue": 255
+    },
+    "class_type": "Image Blank",
+    "_meta": {
+      "title": "Image Blank"
+    }
+  },
+  "333": {
+    "inputs": {
+      "source": [
+        "331",
+        0
+      ]
+    },
+    "class_type": "PreviewAny",
+    "_meta": {
+      "title": "Preview as Text"
+    }
+  },
+  "334": {
+    "inputs": {
+      "positive": [
+        "360",
+        5
+      ]
+    },
+    "class_type": "easy positive",
+    "_meta": {
+      "title": "Positive"
+    }
+  },
+  "336": {
+    "inputs": {
+      "cfg": 3.5,
+      "start_percent": 0.8,
+      "end_percent": 1,
+      "model": [
+        "198",
+        0
+      ]
+    },
+    "class_type": "CFGOverride",
+    "_meta": {
+      "title": "CFG Override"
+    }
+  },
+  "337": {
+    "inputs": {
+      "boolean": [
+        "350",
+        0
+      ],
+      "on_true": [
+        "184",
+        0
+      ],
+      "on_false": [
+        "336",
+        0
+      ]
+    },
+    "class_type": "Switch any [Crystools]",
+    "_meta": {
+      "title": "🪛 Switch any"
+    }
+  },
+  "338": {
+    "inputs": {
+      "boolean": [
+        "350",
+        0
+      ],
+      "on_true": [
+        "343",
+        0
+      ],
+      "on_false": [
+        "344",
+        0
+      ]
+    },
+    "class_type": "Switch any [Crystools]",
+    "_meta": {
+      "title": "🪛 Switch any"
+    }
+  },
+  "339": {
+    "inputs": {
+      "scheduler": "normal",
+      "steps": 45,
+      "denoise": 1,
+      "model": [
+        "198",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "BasicScheduler"
+    }
+  },
+  "341": {
+    "inputs": {
+      "steps": 2,
+      "start_at_sigma": 1,
+      "end_at_sigma": 0.98,
+      "spacing": "linear",
+      "sigmas": [
+        "339",
+        0
+      ]
+    },
+    "class_type": "ExtendIntermediateSigmas",
+    "_meta": {
+      "title": "ExtendIntermediateSigmas"
+    }
+  },
+  "342": {
+    "inputs": {
+      "boolean": [
+        "350",
+        0
+      ],
+      "on_true": [
+        "329",
+        0
+      ],
+      "on_false": [
+        "341",
+        0
+      ]
+    },
+    "class_type": "Switch any [Crystools]",
+    "_meta": {
+      "title": "🪛 Switch any"
+    }
+  },
+  "343": {
+    "inputs": {
+      "value": 3
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float"
+    }
+  },
+  "344": {
+    "inputs": {
+      "value": 4.5
+    },
+    "class_type": "PrimitiveFloat",
+    "_meta": {
+      "title": "Float"
+    }
+  },
+  "350": {
+    "inputs": {
+      "value": [
+        "360",
+        2
+      ]
+    },
+    "class_type": "PrimitiveBoolean",
+    "_meta": {
+      "title": "Boolean"
+    }
+  },
+  "357": {
+    "inputs": {
+      "noise_seed": [
+        "360",
+        1
+      ],
+      "noise_mode": "GPU(=A1111)",
+      "batch_seed_mode": "comfy",
+      "variation_seed": 0,
+      "variation_strength": 0,
+      "variation_method": "linear",
+      "internal_seed": 0
+    },
+    "class_type": "RandomNoise //Inspire",
+    "_meta": {
+      "title": "RandomNoise (inspire)"
+    }
+  },
+  "360": {
+    "inputs": {
+      "_config": "[{\"id\":\"b89919dc-68be-494b-bd11-230c0a7bf978\",\"name\":\"seed\",\"type\":\"SEED\",\"default\":0,\"min\":0,\"max\":9007199254740991,\"step\":1,\"controlMode\":\"fixed\"},{\"id\":\"1ca404db-c84b-4de1-b683-f20789f64458\",\"name\":\"modeSpeed\",\"type\":\"BOOLEAN\",\"default\":false},{\"id\":\"f566fd24-eb0e-4d4d-8fa3-2c8915d9c4d8\",\"name\":\"width\",\"type\":\"INT\",\"default\":1024,\"min\":0,\"max\":2560,\"step\":1},{\"id\":\"2fbc3f49-95c2-4a3e-8860-a046317667d7\",\"name\":\"height\",\"type\":\"INT\",\"default\":1024,\"min\":0,\"max\":2560,\"step\":1},{\"id\":\"85765045-ce5a-45fc-8e42-376baa52c395\",\"name\":\"prompt\",\"type\":\"STRING\",\"default\":\"A cat.\"}]",
+      "seed": 8784484449863653,
+      "modeSpeed": true,
+      "width": 289,
+      "height": 128,
+      "prompt": "{\"high_level_description\":\"A compact horizontal workplace safety illustration showing a steel plant worker continuing operation at a control console while a dangerous converter process is active. Preserve the original composition, character placement, machinery arrangement, and visual style. This is a small narrative illustration for a Chinese industrial safety poster, with no text inside the image.\",\"style_description\":{\"aesthetics\":\"clean, educational, compact, readable, contextual, orderly\",\"lighting\":\"bright even indoor industrial illustration lighting, soft controlled shadows, clear contrast, warm orange furnace glow\",\"medium\":\"graphic_design\",\"art_style\":\"digital cartoon workplace safety illustration, thick dark navy-gray outlines with consistent line weight, smooth cel shading, simplified industrial geometry, restrained environmental detail, expressive but natural worker reactions, small narrative scene, more detailed than an icon but simpler than a technical diagram, matching a companion illustration of a steel plant water-leak incident beside a converter, non-photorealistic\",\"color_palette\":[\"#E8EEF3\",\"#FFFFFF\",\"#5B6675\",\"#2E6FA3\",\"#F2C14B\",\"#D94A34\",\"#F28C28\",\"#B8C3CE\",\"#3E4A59\",\"#8AA0B5\"]},\"compositional_deconstruction\":{\"background\":\"A wide horizontal illustration panel with rounded corners. The interior is a simplified steelmaking workshop rendered in pale blue-gray tones. The background contains gray pipes, railings, and structural elements. The environment is compact, clean, and easy to read, using the same cool industrial palette and flat cel-shaded treatment as the companion converter leak illustration. No text, symbols, labels, logos, or decorative borders inside the scene.\",\"elements\":[{\"type\":\"obj\",\"bbox\":[0,0,1000,1000],\"desc\":\"The complete horizontal safety-poster illustration contained inside a rounded rectangular frame. Preserve a wide panoramic composition approximately two and a half times wider than it is tall.\"},{\"type\":\"obj\",\"bbox\":[40,20,620,980],\"desc\":\"A male steel plant worker positioned on the left half of the image. He wears a yellow safety helmet and a blue work uniform. He is shown in side profile, seated or leaning forward at a control console. One hand rests on or presses the control panel as he continues operating the equipment. He looks toward the right with an alert and slightly concerned expression, mouth slightly open. Show him from approximately the waist up.\"},{\"type\":\"obj\",\"bbox\":[420,180,760,620],\"desc\":\"A blue-gray control console in the foreground between the worker and the furnace. The console has several rectangular control pads or buttons in muted green and gray tones. A prominent red warning beacon sits on top of the console and is clearly visible, suggesting a warning condition while operation continues.\"},{\"type\":\"obj\",\"bbox\":[520,20,1000,980],\"desc\":\"A large gray steel converter occupying the right side and cropped by the frame. Its heavy cylindrical upper body, circular mouth rim, bolts, joints, and support components are simplified but recognizable. Bright orange flames rise from the open top, with a pale warm glow inside the mouth. Use the same thick outlines, muted gray metal, and smooth cel shading as the companion water-leak panel.\"},{\"type\":\"obj\",\"bbox\":[80,0,960,420],\"desc\":\"Supporting steel workshop environment in the background. Include simplified gray pipes, railings, structural supports, and industrial machinery connecting the worker's control area to the converter area. These details should remain secondary and uncluttered, helping the image feel like a real steel plant scene rather than an isolated icon.\"}]}}"
+    },
+    "class_type": "Gen2_InputPanel",
+    "_meta": {
+      "title": "Gen2 Input Panel"
+    }
+  },
+  "361": {
+    "inputs": {
+      "_config": "[{\"id\":\"4fa70fc9-7a7c-4966-91ed-c16368a4eafb\",\"name\":\"imageOutput1Url\",\"type\":\"IMAGE\"}]",
+      "PANEL_LINK": [
+        "360",
+        0
+      ],
+      "param_0": [
+        "25",
+        0
+      ]
+    },
+    "class_type": "Gen2_OutputPanel",
+    "_meta": {
+      "title": "Gen2 Output Panel"
+    }
+  }
+}
