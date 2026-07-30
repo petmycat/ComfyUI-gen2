@@ -5,7 +5,7 @@ A general-purpose ComfyUI custom node pack collecting the sampling fixes, model-
 ## What's in here
 
 - **Flux.2 Fun ControlNet** — branch-only support for Alibaba PAI's official `FLUX.2-dev-Fun-Controlnet-Union-2602.safetensors`, using clone-local ComfyUI block replacements, native model management, exact 260-channel control context packing, reference tokens, schedules, and experimental multi-control composition.
-- **Gen2 Sampling** — compatibility patches that keep model behavior stable across ComfyUI upgrades. Currently: a fix that restores correct **Flux.2 [klein]** output (reference-latent / masked-inpaint workflows) where a core refactor silently changed results.
+- **Gen2 Sampling** — clone-local model patches for sampling behavior. Includes the Flux.2 [klein] compatibility fix and an optional LanPaint dual-mask adapter that keeps LanPaint's binary algorithm mask separate from a continuous soft preservation mask.
 - **Tiling** — tile-based workflow nodes: auto-grid splitting with overlap halos, per-tile masks, seam-aware merging, and a two-pass seam-fix denoise (great for high-res inpaint and tiled upscaling).
 - **API Panels** — a pair of configurable nodes (`Gen2 Input Panel` / `Gen2 Output Panel`) that replace a workflow's scattered `INPUT_*`/`OUTPUT_*` constant nodes. Click **Configure** to define named, typed parameters; each name becomes a typed slot and the API-export key. Designed for driving ComfyUI via the API export. Works on both the legacy LiteGraph and Nodes 2.0 (Vue) frontends.
 - **Utilities** — small QoL nodes: string replace, checkerboard generator, DWpose-with-thresholds.
@@ -27,7 +27,7 @@ This release requires **ComfyUI v0.28.0 or newer**. The Flux.2 Fun integration i
 Sections have independent, optional prerequisites — install only what you use:
 
 - **Flux.2 Fun ControlNet** — no Python package beyond ComfyUI. Put the official `FLUX.2-dev-Fun-Controlnet-Union-2602.safetensors` in `ComfyUI/models/controlnet/`.
-- **Gen2 Sampling / Utilities (string, checkerboard)** — no extra dependencies.
+- **Gen2 Sampling / Utilities (string, checkerboard)** — no extra Python dependencies. The LanPaint soft-denoise patch requires the independent [LanPaint](https://github.com/scraed/LanPaint) custom-node pack at workflow runtime, but ComfyUI-gen2 does not import it directly.
 - **Tiling** — needs `scipy` (Gaussian mask feathering). Without it you'll see `[Gen2] Tiling nodes not available: ...` and everything else still loads.
 - **DWpose utility** — needs `comfyui_controlnet_aux`.
 - **QwenImage ControlNet (outdated)** — needs [VideoX-Fun](https://github.com/aigc-apps/VideoX-Fun) (and [ComfyUI-GGUF](https://github.com/city96/ComfyUI-GGUF) for GGUF models), plus the tokenizer from [Qwen-Image-2512](https://huggingface.co/alibaba-pai/Qwen-Image-2512) placed in `ComfyUI/models/gen2/qwen_2512_tokenizer/`.
@@ -72,6 +72,7 @@ A template workflow is provided at `workflows/flux2_fun_control_2602.json`, with
 | Node | Description |
 |------|-------------|
 | **Gen2 Flux.2 Klein Fix (#12905 revert)** | Restores pre-`44f1246` (PR #12905) Flux.2 [klein] sampling on ComfyUI ≥ v0.17.0. That commit's KV-cache refactor changed Klein output for normal `index` reference-latent workflows (e.g. masked inpaint) even though its new code paths are gated off. This node clones the model and, **only during its own sampling**, swaps the flux `forward_orig`/`_forward` back to the last-good (v0.16.4) implementation, then restores them — no ComfyUI core files are edited, so it survives `git pull`. Wire it `Load Diffusion Model → Gen2 Flux.2 Klein Fix → guider`. Don't combine it on the same model with `FluxKVCache` or the newer flux2 edit (`index_timestep_zero`) features, which are exactly what it reverts. |
+| **Gen2 LanPaint Soft Denoise Patch** | Clones a `MODEL` and attaches a keyed `SAMPLER_SAMPLE` wrapper for the four current LanPaint sampler nodes. The binary `noise_mask` from `InpaintModelConditioning` remains LanPaint's only hard algorithm mask; the separate soft mask controls continuous source blending before and after each LanPaint evaluation. Supports 4D image latents and explicitly rejects unvalidated 5D video latents. See `docs/LANPAINT_SOFT_DENOISE.md` and `workflows/lanpaint_soft_denoise_template.json`. |
 
 ### QwenImage ControlNet (outdated)
 
