@@ -31,7 +31,7 @@
       "id": 2,
       "type": "Gen2_LanPaintSoftDenoisePatch",
       "pos": [500, 80],
-      "size": [360, 120],
+      "size": [420, 520],
       "flags": {},
       "order": 1,
       "mode": 0,
@@ -41,7 +41,25 @@
       ],
       "outputs": [{"name": "model", "type": "MODEL", "links": null}],
       "properties": {"Node name for S&R": "Gen2_LanPaintSoftDenoisePatch"},
-      "widgets_values": []
+      "widgets_values": [
+        "ema_generated",
+        0,
+        0.7,
+        true,
+        1.0,
+        1.0,
+        true,
+        1.0,
+        0.0,
+        "linear",
+        0,
+        0,
+        "soft_band_only",
+        "raw_generated_output",
+        true,
+        "original_source",
+        false
+      ]
     }
   ],
   "links": [],

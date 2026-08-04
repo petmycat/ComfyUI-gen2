@@ -33,6 +33,7 @@ sys.modules.setdefault("comfy.patcher_extension", patcher_extension)
 
 spec = importlib.util.spec_from_file_location("lanpaint_soft_denoise", MODULE_PATH)
 module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
 assert spec.loader is not None
 spec.loader.exec_module(module)
 
@@ -190,6 +191,142 @@ class ProxyTests(unittest.TestCase):
             wrapped(object(), torch.zeros(1), torch.zeros(1))
 
 
+class AdaptiveReferenceTests(unittest.TestCase):
+    def make_config(self, **overrides):
+        values = {
+            "reference_mode": "ema_generated",
+            "reference_warmup_steps": 0,
+            "reference_ema_momentum": 0.5,
+            "enable_input_blend": True,
+            "input_blend_strength_start": 1.0,
+            "input_blend_strength_end": 1.0,
+            "enable_output_blend": True,
+            "output_blend_strength_start": 1.0,
+            "output_blend_strength_end": 0.0,
+            "blend_schedule_type": "linear",
+            "schedule_start_step": 0,
+            "schedule_end_step": 2,
+            "adaptive_region_mode": "hard_edit_region",
+            "adaptive_update_source": "raw_generated_output",
+            "lock_original_outside_adaptive_region": True,
+            "adaptive_reference_init": "original_source",
+        }
+        values.update(overrides)
+        return module.LanPaintSoftDenoiseConfig(**values)
+
+    def test_schedule_constant_linear_and_cosine(self):
+        self.assertEqual(module.schedule_strength(1.0, 0.0, 1, 3, "constant", 0, 2), 1.0)
+        self.assertAlmostEqual(module.schedule_strength(1.0, 0.0, 1, 3, "linear", 0, 2), 0.5)
+        self.assertAlmostEqual(module.schedule_strength(1.0, 0.0, 1, 3, "cosine", 0, 2), 0.5)
+        self.assertEqual(module.schedule_strength(1.0, 0.0, 2, 3, "linear", 0, 0), 0.0)
+
+    def test_mode_c_ema_updates_and_output_strength_decays(self):
+        runtime = FakeLanPaintRuntime()
+        config = self.make_config()
+        state = module.AdaptiveReferenceState(config, total_steps=3)
+        proxy = module.LanPaintSoftDenoiseProxy(runtime, torch.full((1, 2, 2), 0.5), config, state)
+        hard = torch.ones(1, 1, 2, 2)
+        out0 = proxy(torch.zeros_like(runtime.latent_image), torch.tensor([0.5]), denoise_mask=hard, model_options={})
+        self.assertTrue(torch.all(out0 == 6))
+        state.commit_outer_step(0)
+        self.assertTrue(torch.all(state.adaptive_reference == 6))
+        out1 = proxy(torch.zeros_like(runtime.latent_image), torch.tensor([0.5]), denoise_mask=hard, model_options={})
+        self.assertTrue(torch.all(out1 == 9))
+        self.assertAlmostEqual(state.pending_output_strength, 0.5)
+
+    def test_mode_d_bypasses_output_blending_but_updates_input_reference(self):
+        runtime = FakeLanPaintRuntime()
+        config = self.make_config(enable_output_blend=False, output_blend_strength_start=1.0, output_blend_strength_end=1.0)
+        state = module.AdaptiveReferenceState(config, total_steps=2)
+        proxy = module.LanPaintSoftDenoiseProxy(runtime, torch.full((1, 2, 2), 0.5), config, state)
+        hard = torch.ones(1, 1, 2, 2)
+        out = proxy(torch.zeros_like(runtime.latent_image), torch.tensor([0.5]), denoise_mask=hard, model_options={})
+        self.assertTrue(torch.all(out == 10))
+        state.commit_outer_step(0)
+        self.assertTrue(torch.all(state.adaptive_reference == 6))
+        proxy(torch.zeros_like(runtime.latent_image), torch.tensor([0.5]), denoise_mask=hard, model_options={})
+        self.assertTrue(torch.allclose(runtime.received["x"], torch.full_like(runtime.latent_image, 3.25)))
+
+    def test_mode_e_warmup_and_first_generated_initialization(self):
+        runtime = FakeLanPaintRuntime()
+        config = self.make_config(
+            reference_mode="latest_generated",
+            reference_warmup_steps=2,
+            adaptive_reference_init="first_generated_after_warmup",
+        )
+        state = module.AdaptiveReferenceState(config, total_steps=4)
+        proxy = module.LanPaintSoftDenoiseProxy(runtime, torch.full((1, 2, 2), 0.5), config, state)
+        hard = torch.ones(1, 1, 2, 2)
+        for step in range(2):
+            proxy(torch.zeros_like(runtime.latent_image), torch.tensor([0.5]), denoise_mask=hard, model_options={})
+            state.commit_outer_step(step)
+            self.assertIsNone(state.adaptive_reference)
+        proxy(torch.zeros_like(runtime.latent_image), torch.tensor([0.5]), denoise_mask=hard, model_options={})
+        state.commit_outer_step(2)
+        self.assertTrue(torch.all(state.adaptive_reference == 10))
+
+    def test_adaptive_region_modes(self):
+        soft = torch.tensor([[[[0.0, 0.5], [1.0, 0.5]]]])
+        hard = torch.ones_like(soft)
+        band = module.adaptive_update_region("soft_band_only", soft, hard)
+        nonzero = module.adaptive_update_region("soft_nonzero", soft, hard)
+        full = module.adaptive_update_region("hard_edit_region", soft, hard)
+        self.assertEqual(int(band.sum()), 2)
+        self.assertEqual(int(nonzero.sum()), 3)
+        self.assertEqual(int(full.sum()), 4)
+
+    def test_update_source_raw_vs_blended(self):
+        hard = torch.ones(1, 1, 2, 2)
+        for source, expected in (("raw_generated_output", 10.0), ("blended_output", 6.0)):
+            runtime = FakeLanPaintRuntime()
+            config = self.make_config(
+                reference_mode="latest_generated",
+                reference_ema_momentum=0.0,
+                adaptive_update_source=source,
+                output_blend_strength_end=1.0,
+                blend_schedule_type="constant",
+            )
+            state = module.AdaptiveReferenceState(config, total_steps=2)
+            proxy = module.LanPaintSoftDenoiseProxy(runtime, torch.full((1, 2, 2), 0.5), config, state)
+            proxy(torch.zeros_like(runtime.latent_image), torch.tensor([0.5]), denoise_mask=hard, model_options={})
+            state.commit_outer_step(0)
+            self.assertTrue(torch.all(state.adaptive_reference == expected))
+
+    def test_lock_original_outside_region(self):
+        config = self.make_config(reference_mode="latest_generated", adaptive_region_mode="soft_band_only")
+        state = module.AdaptiveReferenceState(config, total_steps=2)
+        source = torch.full((1, 1, 2, 2), 2.0)
+        state.initialize(source)
+        region = torch.tensor([[[[1.0, 0.0], [0.0, 0.0]]]])
+        state.stage_update(torch.full_like(source, 10.0), region, torch.tensor([1.0]), 1.0, 1.0, region, region, region)
+        state.commit_outer_step(0)
+        self.assertEqual(float(state.adaptive_reference[0, 0, 0, 0]), 10.0)
+        self.assertEqual(float(state.adaptive_reference[0, 0, 0, 1]), 2.0)
+
+    def test_sampler_wrapper_creates_fresh_state_per_run_and_commits_on_callback(self):
+        states = []
+
+        def sampler_function(proxy, noise, sigmas, callback=None, **kwargs):
+            states.append(proxy.state)
+            proxy(
+                torch.zeros_like(proxy.latent_image),
+                torch.tensor([0.5]),
+                denoise_mask=torch.ones(1, 1, 2, 2),
+                model_options={},
+            )
+            callback(0, torch.zeros_like(noise), torch.zeros_like(noise), 1)
+            return noise
+
+        config = self.make_config(reference_mode="latest_generated")
+        wrapped = module.make_lanpaint_soft_sampler_function(sampler_function, torch.full((1, 2, 2), 0.5), config)
+        for _ in range(2):
+            runtime = FakeLanPaintRuntime()
+            wrapped(runtime, torch.zeros_like(runtime.latent_image), torch.tensor([1.0, 0.0]), callback=lambda *args: None)
+        self.assertIsNot(states[0], states[1])
+        self.assertEqual(states[0].current_step, 1)
+        self.assertEqual(states[1].current_step, 1)
+
+
 class WrapperAndNodeTests(unittest.TestCase):
     def test_sampler_function_restored_on_error(self):
         original = lambda *args, **kwargs: None
@@ -213,7 +350,7 @@ class WrapperAndNodeTests(unittest.TestCase):
         wrappers = second.wrappers[WrappersMP.SAMPLER_SAMPLE][module.WRAPPER_KEY]
         self.assertEqual(len(wrappers), 1)
         self.assertEqual(original.wrappers, {})
-        self.assertTrue(torch.all(second.attachments[module.ATTACHMENT_KEY] == 1))
+        self.assertTrue(torch.all(second.attachments[module.ATTACHMENT_KEY]["soft_mask"] == 1))
 
 
 if __name__ == "__main__":
