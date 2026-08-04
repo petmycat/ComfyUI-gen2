@@ -67,21 +67,57 @@ The soft mask is prepared independently using bilinear interpolation, continuous
 
 If `model_options["denoise_mask_function"]` exists, the adapter clones model options, removes the function from the copy passed to LanPaint, and applies it to the soft mask instead. This keeps Differential Diffusion scheduling on the soft edit strength without changing LanPaint's binary partition.
 
-## Per-evaluation behavior
+## Adaptive references and outer-step state
 
-Before each LanPaint evaluation, the adapter calculates LanPaint's forward-noised source state through the current model's `model_sampling.noise_scaling`, then blends:
+The patch maintains two clean references for one sampler run:
+
+- `original_source_reference`: an immutable clone of LanPaint's source latent.
+- `adaptive_reference`: a latest-generated or EMA reference, updated only after a completed outer sampler step.
+
+The state is created inside each decorated `sampler_function` invocation and cannot leak into another sampling run. The adapter wraps the sampler callback and commits the staged candidate there. This is deliberately different from incrementing on every proxy call: multi-evaluation samplers can invoke the model several times during one outer step, while LanPaint can also run internal Langevin iterations. Only the callback boundary represents a completed outer step.
+
+Before each LanPaint evaluation, the active clean reference is forward-noised through the current model's `model_sampling.noise_scaling`. Input and output blend strengths are independently scheduled with `constant`, `linear`, or `cosine` interpolation. `schedule_end_step = 0` means the last outer step.
+
+The effective edit mask is:
 
 ```text
-x_work = x * soft_edit + source_noised * (1 - soft_edit)
+effective_edit = 1 - blend_strength * (1 - soft_edit)
 ```
 
-LanPaint is called with `x_work` and the original hard `denoise_mask`. Current LanPaint mutates the supplied state in place; after it returns, the adapter copies `x_work` back to the outer sampler tensor.
+Therefore strength `1` reproduces the full soft-mask effect and strength `0` bypasses that blend side. LanPaint is still called with the original hard `denoise_mask`; its in-place update of `x_work` is copied back to the outer sampler tensor.
 
-The denoised prediction is then blended with the clean source latent:
+Adaptive updates can use either raw LanPaint output or post-blend output and can be restricted to the feather band, all nonzero soft-mask pixels, or the full hard editable region. With `lock_original_outside_adaptive_region` enabled, every update re-anchors pixels outside that region to the immutable original source.
+
+## Experimental mode recipes
+
+Mode C, the default experimental configuration:
 
 ```text
-out = out * soft_edit + latent_image * (1 - soft_edit)
+reference_mode = ema_generated
+reference_ema_momentum = 0.7
+enable_input_blend = true
+input strengths = 1 -> 1
+enable_output_blend = true
+output strengths = 1 -> 0
+blend_schedule_type = linear
+adaptive_region_mode = soft_band_only
+adaptive_update_source = raw_generated_output
+adaptive_reference_init = original_source
 ```
+
+Mode D uses the same EMA/input settings with `enable_output_blend = false`.
+
+Mode E uses:
+
+```text
+reference_mode = latest_generated
+reference_warmup_steps = 2 to 4
+adaptive_reference_init = first_generated_after_warmup
+enable_output_blend = true
+output strengths = 1 -> 0
+```
+
+To reproduce the original adapter behavior, select `original_source`, enable both blends, set all four strengths to `1`, and use `constant` scheduling.
 
 Removing the Gen2 node removes the keyed wrapper from that model branch and restores normal LanPaint behavior.
 
@@ -94,7 +130,8 @@ When LanPaint changes:
 3. Verify the hard mask is still thresholded at `> 0.5` and remains editable-one polarity.
 4. Verify its in-place `input_x.copy_(x)` behavior.
 5. Verify source noising still uses `inner_model.inner_model.model_sampling.noise_scaling`.
-6. Rerun the unit tests and the four-node GPU workflow matrix.
+6. Verify the sampler callback still reports one completion event per outer sigma step, in either dictionary or positional callback form.
+7. Rerun the unit tests and the four-node GPU workflow matrix, including Mode C/D/E visual comparisons.
 
 CPU tests:
 
