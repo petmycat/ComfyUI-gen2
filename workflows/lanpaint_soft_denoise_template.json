@@ -31,7 +31,7 @@
       "id": 2,
       "type": "Gen2_LanPaintSoftDenoisePatch",
       "pos": [500, 80],
-      "size": [420, 520],
+      "size": [460, 920],
       "flags": {},
       "order": 1,
       "mode": 0,
@@ -58,7 +58,25 @@
         "raw_generated_output",
         true,
         "original_source",
-        false
+        false,
+        "legacy",
+        "smoothstep",
+        0.0,
+        1.0,
+        1.0,
+        0.0,
+        1.0,
+        false,
+        1.0,
+        0.2,
+        "cosine",
+        0.15,
+        0.75,
+        "normalized_sigma",
+        "legacy",
+        0.0,
+        1.0,
+        1.0
       ]
     }
   ],
@@ -66,7 +84,7 @@
   "groups": [],
   "config": {},
   "extra": {
-    "info": "Template wiring fragment for ComfyUI v0.28.0. Connect the binary mask to InpaintModelConditioning and its LATENT output to any current LanPaint sampler. Connect the original MODEL and separate soft mask to the Gen2 patch, then connect the patched MODEL to that LanPaint sampler. The development machine has not run the real-model GPU equivalence matrix."
+    "info": "Template wiring fragment for ComfyUI v0.28.0. It keeps output_reference_mode=legacy for compatibility. For the new experiment select latest_generated + blended_output + mixed_original_latest, then start with smoothstep selector, cosine 1.0 to 0.2 output strength over normalized sigma progress 0.15 to 0.75, and legacy output mask shaping. The development machine has not run the real-model GPU visual matrix."
   },
   "version": 0.4
 }

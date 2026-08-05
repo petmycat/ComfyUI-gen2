@@ -327,6 +327,187 @@ class AdaptiveReferenceTests(unittest.TestCase):
         self.assertEqual(states[1].current_step, 1)
 
 
+class MixedOutputReferenceTests(unittest.TestCase):
+    def make_config(self, **overrides):
+        values = {
+            "reference_mode": "latest_generated",
+            "enable_input_blend": True,
+            "input_blend_strength_start": 1.0,
+            "input_blend_strength_end": 1.0,
+            "enable_output_blend": True,
+            "output_blend_strength_start": 1.0,
+            "output_blend_strength_end": 1.0,
+            "blend_schedule_type": "constant",
+            "adaptive_region_mode": "hard_edit_region",
+            "adaptive_update_source": "blended_output",
+            "output_reference_mode": "legacy",
+        }
+        values.update(overrides)
+        return module.LanPaintSoftDenoiseConfig(**values)
+
+    def make_initialized_proxy(self, config, soft=0.5):
+        runtime = FakeLanPaintRuntime()
+        state = module.AdaptiveReferenceState(config, total_steps=3)
+        state.initialize(runtime.latent_image)
+        state.adaptive_reference = torch.full_like(runtime.latent_image, 6.0)
+        proxy = module.LanPaintSoftDenoiseProxy(runtime, torch.full((1, 2, 2), soft), config, state)
+        return runtime, state, proxy
+
+    def test_legacy_ignores_all_new_mixed_controls(self):
+        baseline = self.make_config(output_reference_mode="legacy")
+        changed = self.make_config(
+            output_reference_mode="legacy",
+            reference_selector_curve="power",
+            reference_selector_low=0.2,
+            reference_selector_high=0.8,
+            reference_selector_gamma=4.0,
+            latest_reference_ratio_at_soft_min=0.3,
+            latest_reference_ratio_at_soft_max=0.7,
+            invert_reference_selector=True,
+            mixed_output_blend_strength_start=0.1,
+            mixed_output_blend_strength_end=0.9,
+            mixed_output_blend_schedule="smootherstep",
+            mixed_output_blend_schedule_start=0.1,
+            mixed_output_blend_schedule_end=0.9,
+            output_blend_mask_curve="power",
+            output_blend_mask_low=0.2,
+            output_blend_mask_high=0.8,
+            output_blend_mask_gamma=3.0,
+        )
+        outputs = []
+        inputs = []
+        for config in (baseline, changed):
+            runtime, _, proxy = self.make_initialized_proxy(config)
+            output = proxy(
+                torch.zeros_like(runtime.latent_image),
+                torch.tensor([0.5]),
+                denoise_mask=torch.ones(1, 1, 2, 2),
+                model_options={},
+            )
+            outputs.append(output)
+            inputs.append(runtime.received["x"])
+        self.assertTrue(torch.equal(outputs[0], outputs[1]))
+        self.assertTrue(torch.equal(inputs[0], inputs[1]))
+
+    def test_latest_only_matches_legacy(self):
+        outputs = []
+        for mode in ("legacy", "latest_only"):
+            runtime, _, proxy = self.make_initialized_proxy(self.make_config(output_reference_mode=mode))
+            outputs.append(
+                proxy(
+                    torch.zeros_like(runtime.latent_image),
+                    torch.tensor([0.5]),
+                    denoise_mask=torch.ones(1, 1, 2, 2),
+                    model_options={},
+                )
+            )
+        self.assertTrue(torch.equal(outputs[0], outputs[1]))
+
+    def test_reference_selector_endpoints_ratios_and_inversion(self):
+        soft = torch.tensor([[[[0.0, 0.5, 1.0]]]])
+        selector = module.build_reference_selector(soft, "linear", 0.0, 1.0, 1.0, 0.0, 1.0)
+        self.assertTrue(torch.equal(selector, soft))
+        ranged = module.build_reference_selector(soft, "smoothstep", 0.0, 1.0, 1.0, 0.2, 0.9)
+        self.assertAlmostEqual(float(ranged[0, 0, 0, 0]), 0.2)
+        self.assertAlmostEqual(float(ranged[0, 0, 0, 2]), 0.9)
+        inverted = module.build_reference_selector(soft, "linear", 0.0, 1.0, 1.0, 0.0, 1.0, True)
+        self.assertAlmostEqual(float(inverted[0, 0, 0, 0]), 1.0)
+        self.assertAlmostEqual(float(inverted[0, 0, 0, 2]), 0.0)
+
+    def test_reference_selector_curves_and_validation(self):
+        soft = torch.tensor([[[[0.25]]]])
+        self.assertAlmostEqual(float(module.build_reference_selector(soft, "linear", 0.0, 1.0, 1.0, 0.0, 1.0)), 0.25)
+        self.assertAlmostEqual(float(module.build_reference_selector(soft, "smoothstep", 0.0, 1.0, 1.0, 0.0, 1.0)), 0.15625)
+        self.assertAlmostEqual(float(module.build_reference_selector(soft, "smootherstep", 0.0, 1.0, 1.0, 0.0, 1.0)), 0.103515625)
+        self.assertAlmostEqual(float(module.build_reference_selector(soft, "power", 0.0, 1.0, 2.0, 0.0, 1.0)), 0.0625)
+        with self.assertRaisesRegex(ValueError, "low/high"):
+            module.build_reference_selector(soft, "linear", 0.5, 0.5, 1.0, 0.0, 1.0)
+
+    def test_temporal_schedule_curves_and_boundaries(self):
+        expected_midpoints = {
+            "constant": 0.0,
+            "linear": 0.5,
+            "cosine": 0.5,
+            "smoothstep": 0.5,
+            "smootherstep": 0.5,
+        }
+        for curve, midpoint in expected_midpoints.items():
+            self.assertEqual(module.schedule_fraction(0.1, 0.2, 0.8, curve), 0.0)
+            self.assertEqual(module.schedule_fraction(0.2, 0.2, 0.8, curve), 0.0)
+            self.assertAlmostEqual(module.schedule_fraction(0.5, 0.2, 0.8, curve), midpoint)
+            self.assertEqual(module.schedule_fraction(0.8, 0.2, 0.8, curve), 0.0 if curve == "constant" else 1.0)
+            self.assertEqual(module.schedule_fraction(0.9, 0.2, 0.8, curve), 0.0 if curve == "constant" else 1.0)
+
+    def test_mixed_reference_changes_only_output_path(self):
+        legacy_config = self.make_config(output_reference_mode="legacy")
+        mixed_config = self.make_config(
+            output_reference_mode="mixed_original_latest",
+            reference_selector_curve="linear",
+            mixed_output_blend_schedule="constant",
+            mixed_output_blend_strength_start=1.0,
+            output_blend_mask_curve="legacy",
+        )
+        observations = []
+        for config in (legacy_config, mixed_config):
+            runtime, _, proxy = self.make_initialized_proxy(config)
+            out = proxy(
+                torch.zeros_like(runtime.latent_image),
+                torch.tensor([0.5]),
+                denoise_mask=torch.ones(1, 1, 2, 2),
+                model_options={"keep": True},
+                seed=9,
+            )
+            observations.append((runtime.received, out))
+        legacy_received, legacy_out = observations[0]
+        mixed_received, mixed_out = observations[1]
+        self.assertTrue(torch.equal(legacy_received["x"], mixed_received["x"]))
+        self.assertTrue(torch.equal(legacy_received["denoise_mask"], mixed_received["denoise_mask"]))
+        self.assertEqual(legacy_received["model_options"], mixed_received["model_options"])
+        self.assertEqual(legacy_received["seed"], mixed_received["seed"])
+        self.assertTrue(torch.all(legacy_out == 8.0))
+        self.assertTrue(torch.all(mixed_out == 7.0))
+
+    def test_mixed_output_strength_zero_returns_raw_and_blended_updates_next_reference(self):
+        zero_config = self.make_config(
+            output_reference_mode="mixed_original_latest",
+            mixed_output_blend_strength_start=0.0,
+            mixed_output_blend_strength_end=0.0,
+            mixed_output_blend_schedule="constant",
+        )
+        runtime, _, proxy = self.make_initialized_proxy(zero_config)
+        out = proxy(
+            torch.zeros_like(runtime.latent_image),
+            torch.tensor([0.5]),
+            denoise_mask=torch.ones(1, 1, 2, 2),
+            model_options={},
+        )
+        self.assertTrue(torch.all(out == 10.0))
+
+        blended_config = self.make_config(
+            output_reference_mode="mixed_original_latest",
+            mixed_output_blend_schedule="constant",
+            mixed_output_blend_strength_start=1.0,
+        )
+        runtime, state, proxy = self.make_initialized_proxy(blended_config)
+        out = proxy(
+            torch.zeros_like(runtime.latent_image),
+            torch.tensor([0.5]),
+            denoise_mask=torch.ones(1, 1, 2, 2),
+            model_options={},
+        )
+        state.commit_outer_step(0)
+        self.assertTrue(torch.equal(state.adaptive_reference, out))
+        self.assertTrue(torch.all(state.adaptive_reference == 7.0))
+
+    def test_config_rejects_invalid_ranges(self):
+        with self.assertRaisesRegex(ValueError, "reference_selector_low/high"):
+            self.make_config(reference_selector_low=0.5, reference_selector_high=0.5).validate()
+        with self.assertRaisesRegex(ValueError, "schedule start/end"):
+            self.make_config(mixed_output_blend_schedule_start=0.8, mixed_output_blend_schedule_end=0.2).validate()
+        with self.assertRaisesRegex(ValueError, "output_blend_mask_low/high"):
+            self.make_config(output_blend_mask_low=1.0, output_blend_mask_high=1.0).validate()
+
+
 class WrapperAndNodeTests(unittest.TestCase):
     def test_sampler_function_restored_on_error(self):
         original = lambda *args, **kwargs: None
