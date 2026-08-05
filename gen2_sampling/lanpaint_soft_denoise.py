@@ -32,6 +32,11 @@ _SCHEDULE_TYPES = ("constant", "linear", "cosine")
 _ADAPTIVE_REGION_MODES = ("soft_band_only", "soft_nonzero", "hard_edit_region")
 _ADAPTIVE_UPDATE_SOURCES = ("raw_generated_output", "blended_output")
 _ADAPTIVE_REFERENCE_INITS = ("original_source", "first_generated_after_warmup")
+_OUTPUT_REFERENCE_MODES = ("legacy", "latest_only", "mixed_original_latest", "original_only")
+_REFERENCE_SELECTOR_CURVES = ("linear", "smoothstep", "smootherstep", "power")
+_MIXED_OUTPUT_SCHEDULES = ("constant", "linear", "cosine", "smoothstep", "smootherstep")
+_OUTPUT_MASK_CURVES = ("legacy", "linear", "smoothstep", "smootherstep", "power")
+_MIXED_OUTPUT_SCHEDULE_DOMAINS = ("normalized_step", "normalized_sigma")
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,24 @@ class LanPaintSoftDenoiseConfig:
     lock_original_outside_adaptive_region: bool = True
     adaptive_reference_init: str = "original_source"
     debug_logging: bool = False
+    output_reference_mode: str = "legacy"
+    reference_selector_curve: str = "smoothstep"
+    reference_selector_low: float = 0.0
+    reference_selector_high: float = 1.0
+    reference_selector_gamma: float = 1.0
+    latest_reference_ratio_at_soft_min: float = 0.0
+    latest_reference_ratio_at_soft_max: float = 1.0
+    invert_reference_selector: bool = False
+    mixed_output_blend_strength_start: float = 1.0
+    mixed_output_blend_strength_end: float = 0.2
+    mixed_output_blend_schedule: str = "cosine"
+    mixed_output_blend_schedule_start: float = 0.15
+    mixed_output_blend_schedule_end: float = 0.75
+    mixed_output_schedule_domain: str = "normalized_sigma"
+    output_blend_mask_curve: str = "legacy"
+    output_blend_mask_low: float = 0.0
+    output_blend_mask_high: float = 1.0
+    output_blend_mask_gamma: float = 1.0
 
     def validate(self) -> None:
         choices = (
@@ -61,6 +84,11 @@ class LanPaintSoftDenoiseConfig:
             ("adaptive_region_mode", self.adaptive_region_mode, _ADAPTIVE_REGION_MODES),
             ("adaptive_update_source", self.adaptive_update_source, _ADAPTIVE_UPDATE_SOURCES),
             ("adaptive_reference_init", self.adaptive_reference_init, _ADAPTIVE_REFERENCE_INITS),
+            ("output_reference_mode", self.output_reference_mode, _OUTPUT_REFERENCE_MODES),
+            ("reference_selector_curve", self.reference_selector_curve, _REFERENCE_SELECTOR_CURVES),
+            ("mixed_output_blend_schedule", self.mixed_output_blend_schedule, _MIXED_OUTPUT_SCHEDULES),
+            ("mixed_output_schedule_domain", self.mixed_output_schedule_domain, _MIXED_OUTPUT_SCHEDULE_DOMAINS),
+            ("output_blend_mask_curve", self.output_blend_mask_curve, _OUTPUT_MASK_CURVES),
         )
         for name, value, allowed in choices:
             if value not in allowed:
@@ -81,6 +109,24 @@ class LanPaintSoftDenoiseConfig:
             raise ValueError("Blend schedule steps must be non-negative.")
         if self.schedule_end_step != 0 and self.schedule_end_step < self.schedule_start_step:
             raise ValueError("schedule_end_step must be zero (automatic) or greater than or equal to schedule_start_step.")
+        if not 0.0 <= self.reference_selector_low < self.reference_selector_high <= 1.0:
+            raise ValueError("reference_selector_low/high must satisfy 0.0 <= low < high <= 1.0.")
+        if not self.reference_selector_gamma > 0.0:
+            raise ValueError("reference_selector_gamma must be greater than zero.")
+        if not 0.0 <= self.latest_reference_ratio_at_soft_min <= 1.0:
+            raise ValueError("latest_reference_ratio_at_soft_min must be between 0.0 and 1.0.")
+        if not 0.0 <= self.latest_reference_ratio_at_soft_max <= 1.0:
+            raise ValueError("latest_reference_ratio_at_soft_max must be between 0.0 and 1.0.")
+        if not 0.0 <= self.mixed_output_blend_strength_start <= 1.0:
+            raise ValueError("mixed_output_blend_strength_start must be between 0.0 and 1.0.")
+        if not 0.0 <= self.mixed_output_blend_strength_end <= 1.0:
+            raise ValueError("mixed_output_blend_strength_end must be between 0.0 and 1.0.")
+        if not 0.0 <= self.mixed_output_blend_schedule_start < self.mixed_output_blend_schedule_end <= 1.0:
+            raise ValueError("mixed output schedule start/end must satisfy 0.0 <= start < end <= 1.0.")
+        if not 0.0 <= self.output_blend_mask_low < self.output_blend_mask_high <= 1.0:
+            raise ValueError("output_blend_mask_low/high must satisfy 0.0 <= low < high <= 1.0.")
+        if not self.output_blend_mask_gamma > 0.0:
+            raise ValueError("output_blend_mask_gamma must be greater than zero.")
 
 
 @dataclass
@@ -98,6 +144,10 @@ class AdaptiveReferenceState:
     pending_soft_range: tuple[float, float] = (0.0, 0.0)
     pending_input_range: tuple[float, float] = (1.0, 1.0)
     pending_output_range: tuple[float, float] = (1.0, 1.0)
+    pending_schedule_progress: float = 0.0
+    pending_selector_summary: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    pending_output_mask_summary: tuple[float, float, float] = (1.0, 1.0, 1.0)
+    pending_preservation_summary: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
     def initialize(self, source: torch.Tensor) -> None:
         source = source.detach().clone()
@@ -124,6 +174,10 @@ class AdaptiveReferenceState:
         soft_edit: torch.Tensor,
         effective_input: torch.Tensor,
         effective_output: torch.Tensor,
+        schedule_progress: float = 0.0,
+        reference_selector: torch.Tensor | None = None,
+        output_spatial_mask: torch.Tensor | None = None,
+        preservation_amount: torch.Tensor | None = None,
     ) -> None:
         self.pending_candidate = candidate.detach().clone()
         self.pending_region = region.detach()
@@ -133,6 +187,13 @@ class AdaptiveReferenceState:
         self.pending_soft_range = _tensor_range(soft_edit)
         self.pending_input_range = _tensor_range(effective_input)
         self.pending_output_range = _tensor_range(effective_output)
+        self.pending_schedule_progress = float(schedule_progress)
+        if reference_selector is not None:
+            self.pending_selector_summary = _tensor_summary(reference_selector)
+        if output_spatial_mask is not None:
+            self.pending_output_mask_summary = _tensor_summary(output_spatial_mask)
+        if preservation_amount is not None:
+            self.pending_preservation_summary = _tensor_summary(preservation_amount)
 
     def commit_outer_step(self, completed_step: int | None = None) -> bool:
         step = self.current_step if completed_step is None else int(completed_step)
@@ -147,10 +208,12 @@ class AdaptiveReferenceState:
 
         if self.config.debug_logging or LOGGER.isEnabledFor(logging.DEBUG):
             reference = self.active_reference()
-            LOGGER.debug(
-                "LanPaint adaptive soft denoise outer_step=%d total_steps=%d sigma=%s mode=%s warmup=%s "
+            log = LOGGER.info if self.config.debug_logging else LOGGER.debug
+            log(
+                "[Gen2 LanPaint debug] outer_step=%d total_steps=%d sigma=%s mode=%s warmup=%s "
                 "input_strength=%.6f output_strength=%.6f updated=%s update_source=%s region=%s "
-                "soft=[%.6f,%.6f] effective_input=[%.6f,%.6f] effective_output=[%.6f,%.6f] reference=[%.6f,%.6f]",
+                "soft=[%.6f,%.6f] effective_input=[%.6f,%.6f] effective_output=[%.6f,%.6f] reference=[%.6f,%.6f] "
+                "output_reference_mode=%s progress=%.6f selector=[%.6f,%.6f,%.6f] output_mask=[%.6f,%.6f,%.6f] preservation=[%.6f,%.6f,%.6f]",
                 step,
                 self.total_steps,
                 "unknown" if self.pending_sigma is None else f"{self.pending_sigma:.6f}",
@@ -165,6 +228,11 @@ class AdaptiveReferenceState:
                 *self.pending_input_range,
                 *self.pending_output_range,
                 *_tensor_range(reference),
+                self.config.output_reference_mode,
+                self.pending_schedule_progress,
+                *self.pending_selector_summary,
+                *self.pending_output_mask_summary,
+                *self.pending_preservation_summary,
             )
 
         self.current_step = max(self.current_step + 1, step + 1)
@@ -208,6 +276,15 @@ def _tensor_range(tensor: torch.Tensor) -> tuple[float, float]:
     return (
         float(tensor.detach().float().min().cpu()),
         float(tensor.detach().float().max().cpu()),
+    )
+
+
+def _tensor_summary(tensor: torch.Tensor) -> tuple[float, float, float]:
+    detached = tensor.detach().float()
+    return (
+        float(detached.min().cpu()),
+        float(detached.max().cpu()),
+        float(detached.mean().cpu()),
     )
 
 
@@ -319,6 +396,104 @@ def effective_edit_mask(soft_edit: torch.Tensor, strength: float, enabled: bool)
     if not enabled or strength <= 0.0:
         return torch.ones_like(soft_edit)
     return 1.0 - float(strength) * (1.0 - soft_edit)
+
+
+def _remap_unit_interval(
+    value: torch.Tensor,
+    curve: str,
+    low: float,
+    high: float,
+    gamma: float,
+) -> torch.Tensor:
+    if curve == "legacy":
+        return value.clamp(0.0, 1.0)
+    if not 0.0 <= low < high <= 1.0:
+        raise ValueError("Mask remap low/high must satisfy 0.0 <= low < high <= 1.0.")
+    normalized = ((value.clamp(0.0, 1.0) - low) / (high - low)).clamp(0.0, 1.0)
+    if curve == "linear":
+        return normalized
+    if curve == "smoothstep":
+        return normalized * normalized * (3.0 - 2.0 * normalized)
+    if curve == "smootherstep":
+        return normalized * normalized * normalized * (normalized * (normalized * 6.0 - 15.0) + 10.0)
+    if curve == "power":
+        return normalized.pow(float(gamma))
+    raise ValueError(f"Unknown mask remap curve: {curve}")
+
+
+def build_reference_selector(
+    soft_mask: torch.Tensor,
+    curve: str,
+    low: float,
+    high: float,
+    gamma: float,
+    latest_min: float,
+    latest_max: float,
+    invert: bool = False,
+) -> torch.Tensor:
+    selector = _remap_unit_interval(soft_mask, curve, low, high, gamma)
+    if invert:
+        selector = 1.0 - selector
+    return (latest_min + (latest_max - latest_min) * selector).clamp(0.0, 1.0)
+
+
+def build_mixed_output_reference(
+    original_reference: torch.Tensor,
+    latest_reference: torch.Tensor,
+    reference_selector: torch.Tensor,
+) -> torch.Tensor:
+    if original_reference.shape != latest_reference.shape or original_reference.shape != reference_selector.shape:
+        raise ValueError("Mixed output reference tensors must have identical shapes.")
+    return torch.lerp(original_reference, latest_reference, reference_selector)
+
+
+def schedule_progress_from_sigma(sigma: torch.Tensor, sigmas: torch.Tensor, step: int, total_steps: int, domain: str) -> float:
+    if domain == "normalized_step":
+        return min(max(step / max(total_steps - 1, 1), 0.0), 1.0)
+    if domain != "normalized_sigma":
+        raise ValueError(f"Unknown mixed output schedule domain: {domain}")
+    sigma_value = float(sigma.detach().float().mean().cpu())
+    sigma_values = sigmas.detach().float().reshape(-1)
+    first = float(sigma_values[0].cpu())
+    last = float(sigma_values[-1].cpu())
+    denominator = first - last
+    if abs(denominator) < 1e-12:
+        return min(max(step / max(total_steps - 1, 1), 0.0), 1.0)
+    progress = (first - sigma_value) / denominator
+    return min(max(progress, 0.0), 1.0)
+
+
+def schedule_fraction(progress: float, start: float, end: float, curve: str) -> float:
+    if progress <= start:
+        fraction = 0.0
+    elif progress >= end:
+        fraction = 1.0
+    else:
+        fraction = (progress - start) / max(end - start, 1e-12)
+    if curve == "constant":
+        fraction = 0.0
+    elif curve == "cosine":
+        fraction = 0.5 - 0.5 * math.cos(math.pi * fraction)
+    elif curve == "smoothstep":
+        fraction = fraction * fraction * (3.0 - 2.0 * fraction)
+    elif curve == "smootherstep":
+        fraction = fraction * fraction * fraction * (fraction * (fraction * 6.0 - 15.0) + 10.0)
+    elif curve != "linear":
+        raise ValueError(f"Unknown schedule curve: {curve}")
+    return float(fraction)
+
+
+def scheduled_mixed_output_strength(config: LanPaintSoftDenoiseConfig, progress: float) -> float:
+    fraction = schedule_fraction(
+        progress,
+        config.mixed_output_blend_schedule_start,
+        config.mixed_output_blend_schedule_end,
+        config.mixed_output_blend_schedule,
+    )
+    return float(
+        config.mixed_output_blend_strength_start
+        + (config.mixed_output_blend_strength_end - config.mixed_output_blend_strength_start) * fraction
+    )
 
 
 def adaptive_update_region(
@@ -477,8 +652,58 @@ class LanPaintSoftDenoiseProxy:
             )
 
         x.copy_(x_work)
-        if self.config.enable_output_blend and output_strength > 0.0:
-            blended_output = raw_generated * effective_output + active_reference * (1.0 - effective_output)
+        original_reference = self.state.original_source_reference.to(device=x.device, dtype=x.dtype)
+        output_reference = active_reference
+        output_strength_for_step = output_strength
+        output_spatial_mask = soft_edit
+        reference_selector = torch.zeros_like(soft_edit)
+        preservation_amount = 1.0 - effective_output
+        schedule_progress = schedule_progress_from_sigma(
+            sigma,
+            self.model_k.sigmas,
+            step,
+            self.state.total_steps,
+            self.config.mixed_output_schedule_domain,
+        )
+        if self.config.output_reference_mode == "original_only":
+            output_reference = original_reference
+        elif self.config.output_reference_mode == "mixed_original_latest":
+            reference_selector = build_reference_selector(
+                soft_edit,
+                self.config.reference_selector_curve,
+                self.config.reference_selector_low,
+                self.config.reference_selector_high,
+                self.config.reference_selector_gamma,
+                self.config.latest_reference_ratio_at_soft_min,
+                self.config.latest_reference_ratio_at_soft_max,
+                self.config.invert_reference_selector,
+            )
+            output_reference = build_mixed_output_reference(
+                original_reference,
+                active_reference,
+                reference_selector,
+            )
+            output_strength_for_step = scheduled_mixed_output_strength(self.config, schedule_progress)
+            output_spatial_mask = _remap_unit_interval(
+                soft_edit,
+                self.config.output_blend_mask_curve,
+                self.config.output_blend_mask_low,
+                self.config.output_blend_mask_high,
+                self.config.output_blend_mask_gamma,
+            )
+            preservation_amount = (
+                output_strength_for_step * (1.0 - output_spatial_mask)
+                if self.config.enable_output_blend
+                else torch.zeros_like(output_spatial_mask)
+            ).clamp(0.0, 1.0)
+            effective_output = 1.0 - preservation_amount
+        elif self.config.output_reference_mode == "latest_only":
+            output_reference = active_reference
+        elif self.config.output_reference_mode == "legacy":
+            output_reference = active_reference
+
+        if self.config.enable_output_blend and output_strength_for_step > 0.0:
+            blended_output = raw_generated * effective_output + output_reference * (1.0 - effective_output)
         else:
             blended_output = raw_generated
 
@@ -493,10 +718,14 @@ class LanPaintSoftDenoiseProxy:
             region,
             sigma,
             input_strength,
-            output_strength if self.config.enable_output_blend else 0.0,
+            output_strength_for_step if self.config.enable_output_blend else 0.0,
             soft_edit,
             effective_input,
             effective_output,
+            schedule_progress,
+            reference_selector,
+            output_spatial_mask,
+            preservation_amount,
         )
         return blended_output
 
@@ -613,6 +842,24 @@ class Gen2_LanPaintSoftDenoisePatch:
                 "lock_original_outside_adaptive_region": ("BOOLEAN", {"default": True}),
                 "adaptive_reference_init": (_ADAPTIVE_REFERENCE_INITS, {"default": "original_source"}),
                 "debug_logging": ("BOOLEAN", {"default": False}),
+                "output_reference_mode": (_OUTPUT_REFERENCE_MODES, {"default": "legacy", "tooltip": "legacy preserves the existing output path; mixed_original_latest enables the new opt-in spatial mixture."}),
+                "reference_selector_curve": (_REFERENCE_SELECTOR_CURVES, {"default": "smoothstep", "tooltip": "Shapes how the soft mask chooses original versus latest reference."}),
+                "reference_selector_low": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.99, "step": 0.01}),
+                "reference_selector_high": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 1.0, "step": 0.01}),
+                "reference_selector_gamma": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 8.0, "step": 0.05}),
+                "latest_reference_ratio_at_soft_min": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "latest_reference_ratio_at_soft_max": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "invert_reference_selector": ("BOOLEAN", {"default": False}),
+                "mixed_output_blend_strength_start": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "mixed_output_blend_strength_end": ("FLOAT", {"default": 0.2, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "mixed_output_blend_schedule": (_MIXED_OUTPUT_SCHEDULES, {"default": "cosine"}),
+                "mixed_output_blend_schedule_start": ("FLOAT", {"default": 0.15, "min": 0.0, "max": 0.99, "step": 0.01}),
+                "mixed_output_blend_schedule_end": ("FLOAT", {"default": 0.75, "min": 0.01, "max": 1.0, "step": 0.01}),
+                "mixed_output_schedule_domain": (_MIXED_OUTPUT_SCHEDULE_DOMAINS, {"default": "normalized_sigma", "tooltip": "Uses sigma trajectory progress for the new mixed-output schedule; normalized_step is available for direct step timing."}),
+                "output_blend_mask_curve": (_OUTPUT_MASK_CURVES, {"default": "legacy", "tooltip": "Spatially reshapes output preservation without changing input blending."}),
+                "output_blend_mask_low": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 0.99, "step": 0.01}),
+                "output_blend_mask_high": ("FLOAT", {"default": 1.0, "min": 0.01, "max": 1.0, "step": 0.01}),
+                "output_blend_mask_gamma": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 8.0, "step": 0.05}),
             },
         }
 
@@ -646,6 +893,24 @@ class Gen2_LanPaintSoftDenoisePatch:
         lock_original_outside_adaptive_region=True,
         adaptive_reference_init="original_source",
         debug_logging=False,
+        output_reference_mode="legacy",
+        reference_selector_curve="smoothstep",
+        reference_selector_low=0.0,
+        reference_selector_high=1.0,
+        reference_selector_gamma=1.0,
+        latest_reference_ratio_at_soft_min=0.0,
+        latest_reference_ratio_at_soft_max=1.0,
+        invert_reference_selector=False,
+        mixed_output_blend_strength_start=1.0,
+        mixed_output_blend_strength_end=0.2,
+        mixed_output_blend_schedule="cosine",
+        mixed_output_blend_schedule_start=0.15,
+        mixed_output_blend_schedule_end=0.75,
+        mixed_output_schedule_domain="normalized_sigma",
+        output_blend_mask_curve="legacy",
+        output_blend_mask_low=0.0,
+        output_blend_mask_high=1.0,
+        output_blend_mask_gamma=1.0,
     ):
         config = LanPaintSoftDenoiseConfig(
             reference_mode=str(reference_mode),
@@ -665,5 +930,23 @@ class Gen2_LanPaintSoftDenoisePatch:
             lock_original_outside_adaptive_region=bool(lock_original_outside_adaptive_region),
             adaptive_reference_init=str(adaptive_reference_init),
             debug_logging=bool(debug_logging),
+            output_reference_mode=str(output_reference_mode),
+            reference_selector_curve=str(reference_selector_curve),
+            reference_selector_low=float(reference_selector_low),
+            reference_selector_high=float(reference_selector_high),
+            reference_selector_gamma=float(reference_selector_gamma),
+            latest_reference_ratio_at_soft_min=float(latest_reference_ratio_at_soft_min),
+            latest_reference_ratio_at_soft_max=float(latest_reference_ratio_at_soft_max),
+            invert_reference_selector=bool(invert_reference_selector),
+            mixed_output_blend_strength_start=float(mixed_output_blend_strength_start),
+            mixed_output_blend_strength_end=float(mixed_output_blend_strength_end),
+            mixed_output_blend_schedule=str(mixed_output_blend_schedule),
+            mixed_output_blend_schedule_start=float(mixed_output_blend_schedule_start),
+            mixed_output_blend_schedule_end=float(mixed_output_blend_schedule_end),
+            mixed_output_schedule_domain=str(mixed_output_schedule_domain),
+            output_blend_mask_curve=str(output_blend_mask_curve),
+            output_blend_mask_low=float(output_blend_mask_low),
+            output_blend_mask_high=float(output_blend_mask_high),
+            output_blend_mask_gamma=float(output_blend_mask_gamma),
         )
         return (apply_lanpaint_soft_denoise_patch(model, soft_mask, config),)

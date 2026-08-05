@@ -119,6 +119,45 @@ output strengths = 1 -> 0
 
 To reproduce the original adapter behavior, select `original_source`, enable both blends, set all four strengths to `1`, and use `constant` scheduling.
 
+## Opt-in mixed output reference
+
+`output_reference_mode` is appended after all established controls and defaults to `legacy`. In `legacy`, every new mixed-output setting is ignored and the existing output calculation is used directly.
+
+The modes are:
+
+```text
+legacy                current output behavior, unchanged
+latest_only           explicitly use the current active/latest reference
+original_only         diagnostic fixed original-source output reference
+mixed_original_latest soft-mask-controlled original/latest output mixture
+```
+
+The mixed mode intentionally leaves input reference selection, input noising, input mask scheduling, LanPaint arguments, state propagation, and callback-based outer-step updates unchanged. Only the clean output reference and output preservation strength are replaced.
+
+For mixed mode, the prepared soft mask is independently remapped into a latest-reference selector. Near selector zero the output reference is original source; near selector one it is the previously accepted active/latest reference. `linear`, `smoothstep`, `smootherstep`, and `power` curves are available, with low/high thresholds, gamma, endpoint latest ratios, and optional inversion.
+
+The final output preservation mask can be shaped separately with `output_blend_mask_curve`. `legacy` uses the current soft mask exactly; the other curves apply their own low/high/gamma remap. This separation avoids forcing reference ownership and preservation strength to have the same spatial profile.
+
+Mixed output strength uses a separate normalized schedule and does not alter the existing step-based input/output schedule controls. It supports `constant`, `linear`, `cosine`, `smoothstep`, and `smootherstep`, over either normalized step or normalized sigma trajectory progress.
+
+Recommended starting experiment:
+
+```text
+reference_mode = latest_generated
+adaptive_update_source = blended_output
+output_reference_mode = mixed_original_latest
+reference_selector_curve = smoothstep
+reference_selector_low/high = 0 / 1
+latest_reference_ratio_at_soft_min/max = 0 / 1
+mixed_output_blend_strength_start/end = 1.0 / 0.2
+mixed_output_blend_schedule = cosine
+mixed_output_blend_schedule_start/end = 0.15 / 0.75
+mixed_output_schedule_domain = normalized_sigma
+output_blend_mask_curve = legacy
+```
+
+At outer step N, the mixed reference always uses the previously committed adaptive reference. The current final blended output is only staged afterward and committed by the outer-step callback for step N+1, preventing self-reference within one step.
+
 Removing the Gen2 node removes the keyed wrapper from that model branch and restores normal LanPaint behavior.
 
 ## Maintenance
