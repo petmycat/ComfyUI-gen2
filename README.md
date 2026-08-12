@@ -5,7 +5,7 @@ A general-purpose ComfyUI custom node pack collecting the sampling fixes, model-
 ## What's in here
 
 - **Flux.2 Fun ControlNet** — branch-only support for Alibaba PAI's official `FLUX.2-dev-Fun-Controlnet-Union-2602.safetensors`, using clone-local ComfyUI block replacements, native model management, exact 260-channel control context packing, reference tokens, schedules, and experimental multi-control composition.
-- **Gen2 Sampling** — clone-local model patches for sampling behavior, including the Flux.2 [klein] compatibility fix.
+- **Gen2 Sampling** — clone-local model patches and compatibility loaders, including the Flux.2 [klein] fix and an Ideogram4 AI-Toolkit joint MODEL/Qwen text-encoder LoRA loader.
 - **Tiling** — tile-based workflow nodes: auto-grid splitting with overlap halos, per-tile masks, seam-aware merging, and a two-pass seam-fix denoise (great for high-res inpaint and tiled upscaling).
 - **API Panels** — a pair of configurable nodes (`Gen2 Input Panel` / `Gen2 Output Panel`) that replace a workflow's scattered `INPUT_*`/`OUTPUT_*` constant nodes. Click **Configure** to define named, typed parameters; each name becomes a typed slot and the API-export key. Designed for driving ComfyUI via the API export. Works on both the legacy LiteGraph and Nodes 2.0 (Vue) frontends.
 - **Utilities** — small QoL nodes: string replace, checkerboard generator, DWpose-with-thresholds.
@@ -72,6 +72,8 @@ A template workflow is provided at `workflows/flux2_fun_control_2602.json`, with
 | Node | Description |
 |------|-------------|
 | **Gen2 Flux.2 Klein Fix (#12905 revert)** | Restores pre-`44f1246` (PR #12905) Flux.2 [klein] sampling on ComfyUI ≥ v0.17.0. That commit's KV-cache refactor changed Klein output for normal `index` reference-latent workflows (e.g. masked inpaint) even though its new code paths are gated off. This node clones the model and, **only during its own sampling**, swaps the flux `forward_orig`/`_forward` back to the last-good (v0.16.4) implementation, then restores them — no ComfyUI core files are edited, so it survives `git pull`. Wire it `Load Diffusion Model → Gen2 Flux.2 Klein Fix → guider`. Don't combine it on the same model with `FluxKVCache` or the newer flux2 edit (`index_timestep_zero`) features, which are exactly what it reverts. |
+| **Ideogram4 AI Toolkit LoRA Loader** | Stock-compatible MODEL + CLIP LoRA loader for joint Ideogram4 transformer and AI-Toolkit Qwen3-VL text-encoder LoRAs. It remaps only `lora_te.language_model.*` keys in memory to the connected CLIP's actual ComfyUI patch targets, validates that every detected TE tensor is recognized, leaves transformer keys and tensor values untouched, and delegates cloning, strengths, mixed precision, offloading, and LoRA math to `comfy.sd.load_lora_for_models`. |
+
 ### QwenImage ControlNet (outdated)
 
 > These nodes are kept for backward compatibility and are no longer the focus of
