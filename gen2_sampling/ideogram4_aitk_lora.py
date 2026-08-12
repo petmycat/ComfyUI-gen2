@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import comfy.lora
@@ -16,12 +18,13 @@ _LORA_SUFFIXES = (".lora_A.weight", ".lora_B.weight", ".alpha")
 _VERIFIED_ATTENTION_MODULE = re.compile(
     r"^layers\.(?P<layer>\d+)\.self_attn\.(?P<projection>q_proj|k_proj|v_proj|o_proj)$"
 )
+_CLIP_MAPPER_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
 class RemapDiagnostics:
     source_te_tensors: int
-    remapped_te_tensors: int
+    aliased_te_tensors: int
     recognized_te_tensors: int
     unrecognized_te_keys: tuple[str, ...]
     unexpected_module_paths: tuple[str, ...]
@@ -40,87 +43,126 @@ def split_ai_toolkit_te_key(key: str) -> tuple[str, str] | None:
     return None
 
 
-def convert_ai_toolkit_qwen_te_key(key: str) -> str:
-    parsed = split_ai_toolkit_te_key(key)
-    if parsed is None:
-        return key
-    module_path, suffix = parsed
-    return "lora_te_" + module_path.replace(".", "_") + suffix
+def ai_toolkit_adapter_base(module_path: str) -> str:
+    return _AI_TOOLKIT_TE_PREFIX + module_path
 
 
-def build_clip_module_aliases(clip) -> dict[str, str]:
+def _is_patchable_weight_module(module) -> bool:
+    return hasattr(module, "weight") and getattr(module, "weight", None) is not None
+
+
+def build_clip_runtime_targets(clip) -> dict[str, str]:
+    if clip is None or not hasattr(clip, "cond_stage_model"):
+        return {}
+    targets: dict[str, str] = {}
+    for module_name, module in clip.cond_stage_model.named_modules():
+        if not module_name or not _is_patchable_weight_module(module):
+            continue
+        targets[module_name] = module_name + ".weight"
+    return targets
+
+
+def build_clip_mapped_targets(clip) -> dict[str, str]:
     if clip is None or not hasattr(clip, "cond_stage_model"):
         return {}
     key_map = comfy.lora.model_lora_keys_clip(clip.cond_stage_model, {})
-    aliases: dict[str, str] = {}
+    targets: dict[str, str] = {}
     for alias, state_key in key_map.items():
-        if not alias.startswith("text_encoders."):
+        if not isinstance(state_key, str) or not state_key.endswith(".weight"):
             continue
-        module_path = alias[len("text_encoders."):]
-        aliases.setdefault(module_path, alias)
-        aliases.setdefault(state_key.removesuffix(".weight"), alias)
-    return aliases
+        if alias.startswith("text_encoders."):
+            targets.setdefault(alias[len("text_encoders."):], state_key)
+        targets.setdefault(state_key.removesuffix(".weight"), state_key)
+    return targets
 
 
-def resolve_clip_alias(module_path: str, aliases: dict[str, str]) -> str | None:
-    direct = aliases.get(module_path)
+def _resolve_unique_suffix(module_path: str, candidates: dict[str, str]) -> str | None:
+    direct = candidates.get(module_path)
     if direct is not None:
         return direct
-
     suffix = "." + module_path
-    matches = sorted({alias for actual_path, alias in aliases.items() if actual_path.endswith(suffix)})
+    matches = sorted({target for actual_path, target in candidates.items() if actual_path.endswith(suffix)})
     if len(matches) == 1:
         return matches[0]
     return None
 
 
-def remap_ai_toolkit_ideogram_te_keys(lora: dict, clip) -> tuple[dict, RemapDiagnostics]:
-    aliases = build_clip_module_aliases(clip)
-    converted = {}
+def resolve_clip_target(module_path: str, runtime_targets: dict[str, str]) -> str | None:
+    return _resolve_unique_suffix(module_path, runtime_targets)
+
+
+@contextmanager
+def stock_loader_with_clip_aliases(clip, clip_aliases: dict[str, str]):
+    if not clip_aliases:
+        yield
+        return
+
+    original_mapper = comfy.lora.model_lora_keys_clip
+
+    def mapper_with_runtime_targets(model, key_map={}):
+        mapped = original_mapper(model, key_map)
+        if clip is not None and model is clip.cond_stage_model:
+            mapped.update(clip_aliases)
+        return mapped
+
+    with _CLIP_MAPPER_LOCK:
+        comfy.lora.model_lora_keys_clip = mapper_with_runtime_targets
+        try:
+            yield
+        finally:
+            comfy.lora.model_lora_keys_clip = original_mapper
+
+
+def build_ai_toolkit_clip_aliases(
+    lora: dict,
+    clip,
+) -> tuple[RemapDiagnostics, dict[str, str]]:
+    mapped_targets = build_clip_mapped_targets(clip)
+    runtime_targets = build_clip_runtime_targets(clip)
+    ai_toolkit_aliases: dict[str, str] = {}
     source_te_tensors = 0
-    remapped_te_tensors = 0
     recognized_te_tensors = 0
     untouched_keys = 0
     unrecognized = []
     unexpected_modules = set()
 
-    for key, value in lora.items():
+    for key in lora:
         parsed = split_ai_toolkit_te_key(key)
         if parsed is None:
-            converted[key] = value
             untouched_keys += 1
             continue
 
         source_te_tensors += 1
-        module_path, suffix = parsed
+        module_path, _suffix = parsed
         if _VERIFIED_ATTENTION_MODULE.fullmatch(module_path) is None:
             unexpected_modules.add(module_path)
 
-        alias = resolve_clip_alias(module_path, aliases)
-        if alias is None:
+        state_key = resolve_clip_target(module_path, mapped_targets)
+        if state_key is None:
+            state_key = resolve_clip_target(module_path, runtime_targets)
+        if state_key is None:
             unrecognized.append(key)
-            converted[key] = value
             continue
 
-        new_key = alias + suffix
-        if new_key in converted or (new_key in lora and new_key != key):
+        adapter_base = ai_toolkit_adapter_base(module_path)
+        existing = ai_toolkit_aliases.get(adapter_base)
+        if existing is not None and existing != state_key:
             raise RuntimeError(
-                "Ideogram4 AI Toolkit LoRA Loader produced a duplicate key while remapping "
-                f"{key!r} to {new_key!r}."
+                "Ideogram4 AI Toolkit LoRA Loader resolved one adapter base to multiple CLIP targets: "
+                f"{adapter_base!r} -> {existing!r} and {state_key!r}."
             )
-        converted[new_key] = value
-        remapped_te_tensors += 1
+        ai_toolkit_aliases[adapter_base] = state_key
         recognized_te_tensors += 1
 
     diagnostics = RemapDiagnostics(
         source_te_tensors=source_te_tensors,
-        remapped_te_tensors=remapped_te_tensors,
+        aliased_te_tensors=recognized_te_tensors,
         recognized_te_tensors=recognized_te_tensors,
         unrecognized_te_keys=tuple(unrecognized),
         unexpected_module_paths=tuple(sorted(unexpected_modules)),
         untouched_keys=untouched_keys,
     )
-    return converted, diagnostics
+    return diagnostics, ai_toolkit_aliases
 
 
 class Gen2_Ideogram4AITKLoRALoader:
@@ -150,8 +192,8 @@ class Gen2_Ideogram4AITKLoRALoader:
     FUNCTION = "load_lora"
     CATEGORY = "loaders/ideogram4"
     DESCRIPTION = (
-        "Loads a LoRA through stock ComfyUI after remapping only AI-Toolkit "
-        "lora_te.language_model.* Qwen text-encoder keys to the connected CLIP's actual patch targets."
+        "Loads a LoRA through stock ComfyUI after adding adapter-base aliases for AI-Toolkit "
+        "lora_te.language_model.* Qwen text-encoder keys. LoRA tensors are passed through unchanged."
     )
 
     def load_lora(self, model, clip, lora_name, strength_model, strength_clip):
@@ -170,19 +212,19 @@ class Gen2_Ideogram4AITKLoRALoader:
             lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
             self.loaded_lora = (lora_path, lora)
 
-        converted_lora, diagnostics = remap_ai_toolkit_ideogram_te_keys(lora, clip)
+        diagnostics, ai_toolkit_aliases = build_ai_toolkit_clip_aliases(lora, clip)
         LOGGER.info(
-            "[Ideogram4 AITK LoRA] AI-Toolkit Qwen TE keys detected=%d remapped=%d recognized=%d "
+            "[Ideogram4 AITK LoRA] AI-Toolkit Qwen TE keys detected=%d aliased=%d recognized=%d "
             "unrecognized=%d other_keys_untouched=%d",
             diagnostics.source_te_tensors,
-            diagnostics.remapped_te_tensors,
+            diagnostics.aliased_te_tensors,
             diagnostics.recognized_te_tensors,
             len(diagnostics.unrecognized_te_keys),
             diagnostics.untouched_keys,
         )
         if diagnostics.unexpected_module_paths:
             LOGGER.warning(
-                "[Ideogram4 AITK LoRA] Remapped Qwen TE module paths outside the verified attention set: %s",
+                "[Ideogram4 AITK LoRA] Aliased Qwen TE module paths outside the verified attention set: %s",
                 diagnostics.unexpected_module_paths,
             )
         if diagnostics.unrecognized_te_keys:
@@ -193,10 +235,11 @@ class Gen2_Ideogram4AITKLoRALoader:
                 "ComfyUI's Ideogram4 Qwen text-encoder structure may have changed."
             )
 
-        return comfy.sd.load_lora_for_models(
-            model,
-            clip,
-            converted_lora,
-            strength_model,
-            strength_clip,
-        )
+        with stock_loader_with_clip_aliases(clip, ai_toolkit_aliases):
+            return comfy.sd.load_lora_for_models(
+                model,
+                clip,
+                lora,
+                strength_model,
+                strength_clip,
+            )
