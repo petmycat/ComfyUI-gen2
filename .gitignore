@@ -24,3 +24,9 @@ Thumbs.db
 # Logs
 *.log
 
+
+assets/
+docs/
+tests/
+workflows/
+
