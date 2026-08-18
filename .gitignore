@@ -28,3 +28,4 @@ assets/
 docs/
 tests/
 workflows/
+.cursor/
