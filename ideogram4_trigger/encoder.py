@@ -28,6 +28,7 @@ from .trigger_binding import bind_trigger_prompt, create_private_ideogram4_fast_
 from .types import (
     IDEOGRAM4_CAPTURE_LAYERS,
     IDEOGRAM4_LAYER_COUNT,
+    V9_LORA_RANK,
     ModuleLoRA,
     Ideogram4TriggerActivator,
     TriggerDiagnostics,
@@ -55,6 +56,7 @@ class StagedLoRA:
 class HookContext:
     trigger_mask: torch.Tensor
     layers: Mapping[int, StagedLoRA]
+    invocation_counts: dict[int, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,9 +101,16 @@ def _model_lock(language_model: Any) -> threading.RLock:
 
 def _call_embedding(embedding: Any, token_ids: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
     try:
-        return embedding(token_ids, out_dtype=dtype)
+        output = embedding(token_ids, out_dtype=dtype)
     except TypeError:
-        return embedding(token_ids).to(dtype=dtype)
+        output = embedding(token_ids).to(dtype=dtype)
+    if not isinstance(output, torch.Tensor) or output.ndim != 3:
+        raise RuntimeError("Ideogram4 embedding lookup did not return a [B,L,H] tensor")
+    if output.device != token_ids.device:
+        raise RuntimeError(
+            f"Ideogram4 embedding lookup returned {output.device}, expected {token_ids.device}"
+        )
+    return output
 
 
 def _build_attention_bias(attention_mask: torch.Tensor | None, hidden: torch.Tensor) -> torch.Tensor | None:
@@ -111,8 +120,15 @@ def _build_attention_bias(attention_mask: torch.Tensor | None, hidden: torch.Ten
         if attention_mask.shape != (batch, sequence):
             raise ValueError("attention mask must be [B,L]")
         mask = 1.0 - attention_mask.to(hidden.dtype).reshape(batch, 1, 1, sequence)
-        mask = mask.expand(batch, 1, sequence, sequence).masked_fill(mask.to(torch.bool), float("-inf"))
-    causal = torch.full((sequence, sequence), float("-inf"), dtype=hidden.dtype, device=hidden.device).triu_(1)
+        mask = mask.expand(batch, 1, sequence, sequence).masked_fill(
+            mask.to(torch.bool), torch.finfo(hidden.dtype).min / 4
+        )
+    causal = torch.full(
+        (sequence, sequence),
+        torch.finfo(hidden.dtype).min / 4,
+        dtype=hidden.dtype,
+        device=hidden.device,
+    ).triu_(1)
     return causal if mask is None else mask + causal
 
 
@@ -130,6 +146,25 @@ def _call_decoder_layer(layer: Any, hidden: torch.Tensor, attention_bias: torch.
 def _validate_config(config: TriggerEncodingConfig, hidden_size: int, layer_count: int) -> None:
     if config.trigger_mask.dtype != torch.bool or config.trigger_mask.shape != config.virtual_token_indices.shape:
         raise ValueError("trigger_mask and virtual_token_indices must be aligned [B,L]")
+    if tuple(config.capture_layers) != tuple(sorted(set(config.capture_layers))):
+        raise ValueError("capture layers must be unique and strictly ascending")
+    if not config.capture_layers or any(index < 0 or index >= layer_count for index in config.capture_layers):
+        raise ValueError("capture layers contain an invalid layer index")
+    active_slots = int(config.trigger_mask.sum().item())
+    if config.atomic_token_id is None:
+        if active_slots != 0 or config.lookup_token_id is not None or config.embedding is not None or config.te_layers:
+            raise ValueError("stock literal mode must not carry V9 trigger metadata or components")
+    else:
+        if config.lookup_token_id is None or active_slots <= 0:
+            raise ValueError("active V9 modes require atomic/lookup IDs and at least one trigger slot")
+        active_indices = config.virtual_token_indices[config.trigger_mask]
+        if not torch.all((active_indices >= 0) & (active_indices < 4)):
+            raise ValueError("active V9 trigger slots must use virtual indices 0..3")
+        if active_slots % 4 != 0:
+            raise ValueError("active V9 trigger slots must occur in complete groups of four")
+        expected_indices = torch.arange(4, device=active_indices.device).repeat(active_slots // 4)
+        if not torch.equal(active_indices, expected_indices):
+            raise ValueError("each V9 trigger occurrence must use ordered virtual indices 0,1,2,3")
     if config.embedding is not None and config.embedding.shape != (4, hidden_size):
         raise ValueError(f"V9 embedding must be [4,{hidden_size}]")
     if set(config.te_layers).difference(range(layer_count)):
@@ -138,18 +173,46 @@ def _validate_config(config: TriggerEncodingConfig, hidden_size: int, layer_coun
         raise ValueError("V9 TE module-LoRA must cover all 36 layers")
 
 
+def _linear_dimensions(module: Any, fallback_out: int, fallback_in: int) -> tuple[int, int]:
+    in_features = getattr(module, "in_features", None)
+    out_features = getattr(module, "out_features", None)
+    if isinstance(in_features, int) and in_features > 0 and isinstance(out_features, int) and out_features > 0:
+        return out_features, in_features
+    original_shape = getattr(module, "_orig_shape", None)
+    if isinstance(original_shape, (tuple, list)) and len(original_shape) == 2:
+        return int(original_shape[0]), int(original_shape[1])
+    weight = getattr(module, "weight", None)
+    params = getattr(weight, "_params", None)
+    quantized_shape = getattr(params, "orig_shape", None)
+    if isinstance(quantized_shape, (tuple, list)) and len(quantized_shape) == 2:
+        return int(quantized_shape[0]), int(quantized_shape[1])
+    if weight is not None and len(weight.shape) == 2:
+        return int(weight.shape[0]), int(weight.shape[1])
+    if fallback_out > 0 and fallback_in > 0:
+        return fallback_out, fallback_in
+    raise ValueError("mlp.down_proj does not expose usable logical linear dimensions")
+
+
 def _stage_loras(config: TriggerEncodingConfig, language_model: Any, device: torch.device, dtype: torch.dtype) -> dict[int, StagedLoRA]:
     staged: dict[int, StagedLoRA] = {}
+    hidden_size = int(getattr(language_model.config, "hidden_size", 0))
+    intermediate_size = int(getattr(language_model.config, "intermediate_size", 0))
+    if hidden_size <= 0 or intermediate_size <= 0:
+        raise ValueError("Ideogram4 language model config lacks valid hidden/intermediate sizes")
+    expected_down_shape = (V9_LORA_RANK, intermediate_size)
+    expected_up_shape = (hidden_size, V9_LORA_RANK)
     for index, source in config.te_layers.items():
         module = language_model.layers[index].mlp.down_proj
-        weight = getattr(module, "weight", None)
-        if weight is None or len(weight.shape) != 2:
-            raise ValueError(f"Layer {index} mlp.down_proj does not expose a 2D weight")
-        out_features, in_features = int(weight.shape[0]), int(weight.shape[1])
-        if tuple(source.down.shape) != (source.rank, in_features) or tuple(source.up.shape) != (out_features, source.rank):
+        logical_shape = _linear_dimensions(module, hidden_size, intermediate_size)
+        if logical_shape != (hidden_size, intermediate_size):
+            raise ValueError(
+                f"Layer {index} mlp.down_proj logical shape {logical_shape} conflicts with model config "
+                f"({hidden_size}, {intermediate_size})"
+            )
+        if tuple(source.down.shape) != expected_down_shape or tuple(source.up.shape) != expected_up_shape:
             raise ValueError(
                 f"Layer {index} artifact/module shape mismatch: down={tuple(source.down.shape)}, "
-                f"up={tuple(source.up.shape)}, module=({out_features},{in_features})"
+                f"up={tuple(source.up.shape)}, expected={expected_down_shape}/{expected_up_shape}"
             )
         staged[index] = StagedLoRA(
             source.down.to(device=device, dtype=dtype), source.up.to(device=device, dtype=dtype),
@@ -167,10 +230,14 @@ def _hook_for_layer(layer_index: int):
         if not inputs or not isinstance(inputs[0], torch.Tensor) or not isinstance(output, torch.Tensor):
             raise RuntimeError(f"Layer {layer_index} down_proj hook received unsupported input/output")
         staged = context.layers[layer_index]
-        return apply_masked_module_lora(
+        context.invocation_counts[layer_index] = context.invocation_counts.get(layer_index, 0) + 1
+        updated = apply_masked_module_lora(
             output, inputs[0], context.trigger_mask, staged.down, staged.up,
             staged.strength, staged.alpha, staged.rank,
         )
+        if not torch.isfinite(updated).all().item():
+            raise RuntimeError(f"Layer {layer_index} V9 module-LoRA produced NaN or infinity")
+        return updated
     return hook
 
 
@@ -178,13 +245,23 @@ def _install_hooks(language_model: Any, layer_indices: Mapping[int, StagedLoRA])
     handles: list[Any] = []
     try:
         for index in sorted(layer_indices):
-            handles.append(language_model.layers[index].mlp.down_proj.register_forward_hook(_hook_for_layer(index)))
-    except Exception:
+            handle = language_model.layers[index].mlp.down_proj.register_forward_hook(
+                _hook_for_layer(index)
+            )
+            if handle is None or not callable(getattr(handle, "remove", None)):
+                raise RuntimeError(f"Layer {index} returned an invalid forward-hook handle")
+            handles.append(handle)
+    except Exception as install_error:
+        cleanup_errors: list[Exception] = []
         for handle in reversed(handles):
             try:
                 handle.remove()
-            except Exception:
-                pass
+            except Exception as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+        if cleanup_errors:
+            raise RuntimeError(
+                f"Hook installation failed and {len(cleanup_errors)} installed hooks could not be removed"
+            ) from install_error
         raise
     return handles
 
@@ -210,6 +287,11 @@ def encode_qwen_layers(language_model: Any, token_ids: torch.Tensor, attention_m
     if config.atomic_token_id is not None and config.lookup_token_id is not None:
         token_ids = remap_atomic_token_ids(token_ids, config.atomic_token_id, config.lookup_token_id)
     hidden = _call_embedding(language_model.embed_tokens, token_ids, dtype)
+    if hidden.shape[:2] != token_ids.shape or hidden.shape[-1] != hidden_size:
+        raise RuntimeError(
+            f"Ideogram4 embedding output shape {tuple(hidden.shape)} does not match "
+            f"tokens {tuple(token_ids.shape)} and hidden size {hidden_size}"
+        )
     trigger_mask = config.trigger_mask.to(hidden.device)
     virtual_indices = config.virtual_token_indices.to(hidden.device)
     if config.embedding is not None:
@@ -223,40 +305,75 @@ def encode_qwen_layers(language_model: Any, token_ids: torch.Tensor, attention_m
     queue = runtime.make_prefetch_queue(list(layers), hidden.device, {"prefetch_dynamic_vbars": getattr(language_model, "prefetch_dynamic_vbars", False)})
     staged = _stage_loras(config, language_model, hidden.device, hidden.dtype)
     handles: list[Any] = []
+    invocation_counts: dict[int, int] = {}
     token = None
     primary_error: BaseException | None = None
     captures: list[torch.Tensor] = []
     cleaned = False
     try:
-        token = _HOOK_CONTEXT.set(HookContext(trigger_mask, staged))
+        token = _HOOK_CONTEXT.set(HookContext(trigger_mask, staged, invocation_counts))
         handles = _install_hooks(language_model, staged)
         capture_set = set(config.capture_layers)
         for index, layer in enumerate(layers):
             def core() -> None:
                 nonlocal hidden
                 hidden = _call_decoder_layer(layer, hidden, attention_bias, freqs_cis, optimized_attention)
-            runtime.prefetch_queue_pop(queue, hidden.device, layer, hidden.dtype, core=core, enable_graph=False)
+            if runtime.prefetch_executes_core:
+                runtime.prefetch_queue_pop(
+                    queue,
+                    hidden.device,
+                    layer,
+                    hidden.dtype,
+                    core=core,
+                    enable_graph=False,
+                )
+            else:
+                runtime.prefetch_queue_pop(queue, hidden.device, layer)
+                core()
             if index in capture_set:
                 captures.append(hidden.clone())
-        if queue is not None:
-            runtime.prefetch_queue_pop(queue, hidden.device, None)
     except BaseException as exc:
         primary_error = exc
         raise
     finally:
-        cleanup_error: BaseException | None = None
+        cleanup_errors: list[BaseException] = []
+        if queue is not None:
+            try:
+                runtime.prefetch_queue_pop(queue, hidden.device, None)
+            except BaseException as exc:
+                cleanup_errors.append(exc)
         try:
             _remove_hooks(handles)
             cleaned = True
         except BaseException as exc:
-            cleanup_error = exc
+            cleanup_errors.append(exc)
         if token is not None:
-            _HOOK_CONTEXT.reset(token)
-        if cleanup_error is not None and primary_error is None:
-            raise cleanup_error
+            try:
+                _HOOK_CONTEXT.reset(token)
+            except BaseException as exc:
+                cleanup_errors.append(exc)
+        if cleanup_errors:
+            if primary_error is not None:
+                raise RuntimeError(
+                    f"Ideogram4 V9 encode failed and cleanup also reported {len(cleanup_errors)} error(s)"
+                ) from primary_error
+            raise RuntimeError(
+                f"Ideogram4 V9 cleanup reported {len(cleanup_errors)} error(s)"
+            ) from cleanup_errors[0]
+    unexpected_counts = {
+        index: invocation_counts.get(index, 0)
+        for index in staged
+        if invocation_counts.get(index, 0) != 1
+    }
+    if unexpected_counts:
+        raise RuntimeError(
+            f"V9 module-LoRA hooks did not execute exactly once per layer: {unexpected_counts}"
+        )
     if len(captures) != len(config.capture_layers):
         raise RuntimeError(f"captured {len(captures)} post-layer tensors, expected {len(config.capture_layers)}")
     conditioning = combine_post_layer_captures(captures)
+    if not torch.isfinite(conditioning).all().item():
+        raise RuntimeError("Ideogram4 V9 conditioning contains NaN or infinity")
     output_mask = None if attention_mask is None else attention_mask.to(conditioning.device)
     if config.apply_output_attention_mask:
         conditioning = apply_conditioning_attention_mask(conditioning, output_mask)
@@ -266,6 +383,8 @@ def encode_qwen_layers(language_model: Any, token_ids: torch.Tensor, attention_m
 def _mode_config(activator: Ideogram4TriggerActivator, mode: str) -> tuple[torch.Tensor | None, Mapping[int, ModuleLoRA], float]:
     if mode not in RUNTIME_MODES:
         raise ValueError(f"unsupported V9 trigger mode {mode!r}")
+    if not isinstance(activator, Ideogram4TriggerActivator):
+        raise TypeError("activator input is not an Ideogram4 V9 trigger activator")
     if mode == "stock_literal":
         return None, {}, 0.0
     embedding = None
@@ -282,7 +401,16 @@ def encode_ideogram4_trigger(clip: Any, activator: Ideogram4TriggerActivator, te
     clip_model, language_model = resolve_qwen_transformer(clip)
     lock = _model_lock(language_model)
     private_tokenizer = create_private_ideogram4_fast_tokenizer(clip.tokenizer, literal=literal)
-    vocab_limit = int(getattr(language_model, "vocab_size", language_model.embed_tokens.weight.shape[0]))
+    vocab_limit_value = getattr(language_model, "vocab_size", None)
+    if vocab_limit_value is None:
+        config = getattr(language_model, "config", None)
+        vocab_limit_value = getattr(config, "vocab_size", None)
+    if vocab_limit_value is None:
+        weight = getattr(getattr(language_model, "embed_tokens", None), "weight", None)
+        vocab_limit_value = None if weight is None else weight.shape[0]
+    if vocab_limit_value is None or int(vocab_limit_value) <= 0:
+        raise RuntimeError("Ideogram4 language model does not expose a valid frozen vocabulary size")
+    vocab_limit = int(vocab_limit_value)
     binding = bind_trigger_prompt(
         private_tokenizer,
         text,
@@ -307,8 +435,9 @@ def encode_ideogram4_trigger(clip: Any, activator: Ideogram4TriggerActivator, te
         if execution_device is None:
             raise RuntimeError("Loaded Ideogram4 CLIP patcher does not expose an execution device")
         set_clip_options = getattr(getattr(clip, "cond_stage_model", None), "set_clip_options", None)
-        if callable(set_clip_options):
-            set_clip_options({"execution_device": execution_device})
+        if not callable(set_clip_options):
+            raise RuntimeError("Connected Ideogram4 CLIP cannot set its execution device")
+        set_clip_options({"execution_device": execution_device})
         device = torch.device(execution_device)
         output = encode_qwen_layers(
             language_model, token_ids.to(device), attention_mask.to(device),
@@ -317,13 +446,25 @@ def encode_ideogram4_trigger(clip: Any, activator: Ideogram4TriggerActivator, te
                 virtual_indices.to(device), embedding, te_layers, te_strength,
             ),
         )
+    mode_notes = {
+        "semantic_only": "four-slot embedding and 36-layer module-LoRA enabled",
+        "embedding_only": "four-slot embedding enabled; module-LoRA disabled",
+        "internal_only": "frozen four-slot initializer and 36-layer module-LoRA enabled",
+        "activator_bypass": "frozen four-slot initializer enabled; module-LoRA disabled",
+        "stock_literal": "literal encoded without virtual-slot expansion or module-LoRA",
+    }
+    expected_hooks = len(te_layers)
+    if output.hooks_installed != expected_hooks:
+        raise RuntimeError(
+            f"V9 diagnostics mismatch: installed {output.hooks_installed} hooks, expected {expected_hooks}"
+        )
     diagnostics = TriggerDiagnostics(
         mode, binding.rendered_text, literal, binding.occurrence_count, binding.slot_count,
         binding.token_spans, binding.token_indices, binding.virtual_token_indices, binding.occurrence_indices,
         binding.atomic_token_id, binding.lookup_token_id, len(binding.input_ids), report.runtime_source,
         report.backend_identity, str(output.conditioning.device), str(output.conditioning.dtype),
         output.hooks_installed, output.hooks_cleaned,
-        ("V9 uses four virtual slots and 36 independent down_proj module-LoRA hooks",),
+        (mode_notes[mode], f"post-layer captures={list(IDEOGRAM4_CAPTURE_LAYERS)}; layout=hidden-major-tap-minor"),
     )
     return output.as_conditioning(), diagnostics
 

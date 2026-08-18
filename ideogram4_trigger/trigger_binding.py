@@ -326,7 +326,15 @@ def bind_trigger_prompt(
             "chat template changed or duplicated literal-trigger occurrences; offset mapping is ambiguous"
         )
     if stock_literal:
-        ids, attention, _ = _tokenize_offsets(tokenizer, rendered, max_length)
+        ids, attention, offsets = _tokenize_offsets(tokenizer, rendered, max_length)
+        for span in rendered_spans:
+            matches = [
+                index
+                for index, (token_start, token_end) in enumerate(offsets)
+                if token_end > token_start and token_start < span[1] and token_end > span[0]
+            ]
+            if not matches or offsets[matches[0]][0] > span[0] or offsets[matches[-1]][1] < span[1]:
+                raise TriggerTruncationError("stock literal occurrence was truncated or not tokenized")
         return TriggerBindingMetadata(raw_text, raw_text, rendered, literal, rendered_spans, (), (), (), (), tuple(ids), tuple(attention), tuple(0 for _ in ids), None, None)
     if vocab_limit is None:
         vocab_limit = len(tokenizer.get_vocab())
@@ -337,6 +345,8 @@ def bind_trigger_prompt(
         raise TriggerTruncationError("max_length cannot fit the configured virtual trigger tokens")
     ids, attention, offsets = _tokenize_offsets(tokenizer, rendered, tokenizer_max_length)
     occurrence_positions = [_overlapping_token(offsets, span) for span in rendered_spans]
+    if len(set(occurrence_positions)) != len(occurrence_positions):
+        raise TriggerAtomicityError("multiple literal occurrences resolved to the same contextual token")
     expanded_ids: list[int] = []
     expanded_attention: list[int] = []
     trigger_mask: list[int] = []

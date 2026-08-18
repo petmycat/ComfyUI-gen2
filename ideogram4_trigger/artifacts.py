@@ -230,6 +230,8 @@ def _require_exact_keys(tensors: Mapping[str, torch.Tensor], expected: Sequence[
 def _require_bfloat16(tensor: torch.Tensor, key: str) -> None:
     if tensor.dtype != torch.bfloat16:
         raise ArtifactValidationError(f"Artifact tensor {key!r} must use bfloat16")
+    if not torch.isfinite(tensor).all().item():
+        raise ArtifactValidationError(f"Artifact tensor {key!r} contains NaN or infinity")
 
 
 def load_trigger_embedding(path: PathLike, verify_hashes: bool = True, expected_file_sha256: str | None = None, hidden_size: int = EXPECTED_HIDDEN_SIZE) -> TriggerEmbedding:
@@ -250,7 +252,14 @@ def _expected_te_keys(layer_count: int = IDEOGRAM4_LAYER_COUNT) -> tuple[str, ..
     )
 
 
-def load_te_adapter(path: PathLike, verify_hashes: bool = True, expected_file_sha256: str | None = None, layer_count: int = IDEOGRAM4_LAYER_COUNT) -> TEModuleLoRAArtifact:
+def load_te_adapter(
+    path: PathLike,
+    verify_hashes: bool = True,
+    expected_file_sha256: str | None = None,
+    layer_count: int = IDEOGRAM4_LAYER_COUNT,
+    hidden_size: int = EXPECTED_HIDDEN_SIZE,
+    intermediate_size: int = 12288,
+) -> TEModuleLoRAArtifact:
     tensors, manifest, identity = _load_tensors(path, "te_adapter", verify_hashes, expected_file_sha256)
     _require_exact_keys(tensors, _expected_te_keys(layer_count))
     grouped: dict[int, dict[str, torch.Tensor]] = {}
@@ -266,10 +275,14 @@ def load_te_adapter(path: PathLike, verify_hashes: bool = True, expected_file_sh
     layers: dict[int, ModuleLoRA] = {}
     for layer in range(layer_count):
         down, up = grouped[layer]["down"], grouped[layer]["up"]
-        if down.ndim != 2 or down.shape[0] != V9_LORA_RANK:
-            raise ArtifactValidationError(f"Layer {layer} down tensor must be [{V9_LORA_RANK}, in_features]")
-        if up.ndim != 2 or tuple(up.shape) != (up.shape[0], V9_LORA_RANK):
-            raise ArtifactValidationError(f"Layer {layer} up tensor must be [out_features, {V9_LORA_RANK}]")
+        if tuple(down.shape) != (V9_LORA_RANK, intermediate_size):
+            raise ArtifactValidationError(
+                f"Layer {layer} down tensor must be [{V9_LORA_RANK}, {intermediate_size}]"
+            )
+        if tuple(up.shape) != (hidden_size, V9_LORA_RANK):
+            raise ArtifactValidationError(
+                f"Layer {layer} up tensor must be [{hidden_size}, {V9_LORA_RANK}]"
+            )
         layers[layer] = ModuleLoRA(down, up, layer, f"language_model.layers.{layer}.mlp.down_proj")
     return TEModuleLoRAArtifact(layers, manifest, identity)
 
@@ -311,8 +324,30 @@ class ArtifactCache:
     def load_embedding(self, path: PathLike, verify_hashes: bool = True, expected_file_sha256: str | None = None, hidden_size: int = EXPECTED_HIDDEN_SIZE) -> TriggerEmbedding:
         return self._get_or_load(path, load_trigger_embedding, "embedding", verify_hashes, expected_file_sha256, (hidden_size,), {"hidden_size": hidden_size})
 
-    def load_te_adapter(self, path: PathLike, verify_hashes: bool = True, expected_file_sha256: str | None = None, layer_count: int = IDEOGRAM4_LAYER_COUNT) -> TEModuleLoRAArtifact:
-        return self._get_or_load(path, load_te_adapter, "te_adapter", verify_hashes, expected_file_sha256, (layer_count,), {"layer_count": layer_count})
+    def load_te_adapter(
+        self,
+        path: PathLike,
+        verify_hashes: bool = True,
+        expected_file_sha256: str | None = None,
+        layer_count: int = IDEOGRAM4_LAYER_COUNT,
+        hidden_size: int = EXPECTED_HIDDEN_SIZE,
+        intermediate_size: int = 12288,
+    ) -> TEModuleLoRAArtifact:
+        options = (layer_count, hidden_size, intermediate_size)
+        kwargs = {
+            "layer_count": layer_count,
+            "hidden_size": hidden_size,
+            "intermediate_size": intermediate_size,
+        }
+        return self._get_or_load(
+            path,
+            load_te_adapter,
+            "te_adapter",
+            verify_hashes,
+            expected_file_sha256,
+            options,
+            kwargs,
+        )
 
 
 DEFAULT_ARTIFACT_CACHE = ArtifactCache()
