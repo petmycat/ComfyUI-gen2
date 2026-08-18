@@ -204,7 +204,7 @@ def _tokenizer_children(value: Any) -> list[Any]:
     return children
 
 
-def _unwrap_huggingface_tokenizer(tokenizer_or_clip: Any) -> Any:
+def resolve_huggingface_tokenizer(tokenizer_or_clip: Any) -> Any:
     pending, seen = [tokenizer_or_clip], set()
     while pending:
         value = pending.pop(0)
@@ -248,7 +248,7 @@ def validate_fast_slow_tokenizer_parity(slow_tokenizer: Any, fast_tokenizer: Any
 
 
 def create_private_ideogram4_fast_tokenizer(connected_tokenizer_or_clip: Any, parity_text: str = "Ideogram4 tokenizer parity check.", literal: str | None = None, validate_parity: bool = True) -> Any:
-    slow = _unwrap_huggingface_tokenizer(connected_tokenizer_or_clip)
+    slow = resolve_huggingface_tokenizer(connected_tokenizer_or_clip)
     try:
         from transformers import Qwen2TokenizerFast
     except ImportError as exc:
@@ -412,5 +412,6 @@ __all__ = [
     "TriggerConflictError", "TriggerLiteralNotFoundError", "TriggerPlaceholderError", "TriggerTokenizerError", "TriggerTokenizerParityError",
     "TriggerTruncationError", "bind_trigger_batch", "bind_trigger_prompt",
     "create_private_ideogram4_fast_tokenizer", "find_literal_spans", "register_atomic_literal",
+    "resolve_huggingface_tokenizer",
     "render_chat_prompt", "resolve_trigger_literal", "validate_fast_slow_tokenizer_parity",
 ]

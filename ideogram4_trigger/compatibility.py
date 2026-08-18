@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, Callable
 
+from .trigger_binding import TriggerTokenizerError, resolve_huggingface_tokenizer
 from .types import EXPECTED_HIDDEN_SIZE, IDEOGRAM4_CAPTURE_LAYERS, IDEOGRAM4_LAYER_COUNT
 
 
@@ -149,8 +150,14 @@ def validate_ideogram4_backend(clip: Any) -> Ideogram4CompatibilityReport:
         config = getattr(language_model, "config", None)
         if config is None or not all(hasattr(config, name) for name in ("head_dim", "rope_theta", "rope_dims")):
             raise UnsupportedComfyUIError("Backend lacks native Qwen3-VL MRoPE/position interfaces")
-    if tokenizer is None or not hasattr(tokenizer, "tokenizer"):
-        raise UnsupportedComfyUIError("Connected CLIP lacks an identifiable native tokenizer wrapper")
+    if tokenizer is None:
+        raise UnsupportedComfyUIError("Connected CLIP does not expose a tokenizer")
+    try:
+        resolve_huggingface_tokenizer(tokenizer)
+    except TriggerTokenizerError as exc:
+        raise UnsupportedComfyUIError(
+            "Connected CLIP lacks an identifiable native Ideogram4/Qwen tokenizer wrapper"
+        ) from exc
     return Ideogram4CompatibilityReport(
         True, identity, runtime.source, int(hidden_size), len(layers), IDEOGRAM4_CAPTURE_LAYERS,
         type(language_model).__name__, type(clip_model).__name__, type(tokenizer).__name__, None,
