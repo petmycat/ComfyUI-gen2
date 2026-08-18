@@ -183,6 +183,27 @@ def _tokenize_offsets(
     return ids, masks, offsets
 
 
+def _tokenizer_children(value: Any) -> list[Any]:
+    children: list[Any] = []
+    for attribute in (
+        "tokenizer",
+        "clip",
+        "clip_l",
+        "qwen3_vl",
+        "qwen3vl_8b",
+        "qwen3_8b",
+    ):
+        children.append(getattr(value, attribute, None))
+    dynamic_names = (
+        getattr(value, "clip", None),
+        getattr(value, "clip_name", None),
+    )
+    for name in dynamic_names:
+        if isinstance(name, str) and name:
+            children.append(getattr(value, name, None))
+    return children
+
+
 def _unwrap_huggingface_tokenizer(tokenizer_or_clip: Any) -> Any:
     pending, seen = [tokenizer_or_clip], set()
     while pending:
@@ -192,9 +213,10 @@ def _unwrap_huggingface_tokenizer(tokenizer_or_clip: Any) -> Any:
         seen.add(id(value))
         if hasattr(value, "get_vocab") and callable(value) and hasattr(value, "apply_chat_template"):
             return value
-        for attribute in ("tokenizer", "clip", "clip_l", "qwen3_vl", "qwen3_8b"):
-            pending.append(getattr(value, attribute, None))
-    raise TriggerTokenizerError("could not locate the connected Hugging Face tokenizer")
+        pending.extend(_tokenizer_children(value))
+    raise TriggerTokenizerError(
+        "could not locate the Hugging Face tokenizer inside the connected ComfyUI tokenizer wrapper"
+    )
 
 
 def _tokenizer_resource_path(tokenizer: Any) -> Path:
