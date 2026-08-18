@@ -17,6 +17,10 @@ class TriggerPlaceholderError(TriggerBindingError):
     pass
 
 
+class TriggerLiteralNotFoundError(TriggerBindingError):
+    pass
+
+
 class TriggerConflictError(TriggerBindingError):
     pass
 
@@ -284,21 +288,24 @@ def bind_trigger_prompt(
     tokenizer: Any,
     raw_text: str,
     literal: str,
-    placeholder: str = "[trigger]",
     vocab_limit: int | None = None,
     max_length: int | None = None,
     stock_literal: bool = False,
 ) -> TriggerBindingMetadata:
-    resolved, resolved_spans = resolve_trigger_literal(raw_text, literal, placeholder)
-    rendered = render_chat_prompt(tokenizer, resolved)
+    if not isinstance(raw_text, str) or not isinstance(literal, str) or not literal:
+        raise TriggerLiteralNotFoundError("text and literal must be valid, and literal must not be empty")
+    source_spans = find_literal_spans(raw_text, literal)
+    if not source_spans:
+        raise TriggerLiteralNotFoundError(f"text does not contain the configured literal trigger {literal!r}")
+    rendered = render_chat_prompt(tokenizer, raw_text)
     rendered_spans = find_literal_spans(rendered, literal)
-    if len(rendered_spans) != len(resolved_spans):
+    if len(rendered_spans) != len(source_spans):
         raise TriggerConflictError(
             "chat template changed or duplicated literal-trigger occurrences; offset mapping is ambiguous"
         )
     if stock_literal:
         ids, attention, _ = _tokenize_offsets(tokenizer, rendered, max_length)
-        return TriggerBindingMetadata(raw_text, resolved, rendered, literal, rendered_spans, (), (), (), (), tuple(ids), tuple(attention), tuple(0 for _ in ids), None, None)
+        return TriggerBindingMetadata(raw_text, raw_text, rendered, literal, rendered_spans, (), (), (), (), tuple(ids), tuple(attention), tuple(0 for _ in ids), None, None)
     if vocab_limit is None:
         vocab_limit = len(tokenizer.get_vocab())
     atomic_id, lookup_id = register_atomic_literal(tokenizer, literal, vocab_limit)
@@ -340,7 +347,7 @@ def bind_trigger_prompt(
         )
     token_indices = tuple(index for index, value in enumerate(trigger_mask) if value)
     return TriggerBindingMetadata(
-        raw_text, resolved, rendered, literal, rendered_spans, tuple(token_spans), token_indices,
+        raw_text, raw_text, rendered, literal, rendered_spans, tuple(token_spans), token_indices,
         tuple(virtual_indices[index] for index in token_indices),
         tuple(occurrence_indices[index] for index in token_indices), tuple(expanded_ids),
         tuple(expanded_attention), tuple(trigger_mask), atomic_id, lookup_id,
@@ -380,7 +387,7 @@ def bind_trigger_batch(tokenizer: Any, raw_texts: Sequence[str], literal: str, p
 
 __all__ = [
     "TriggerAtomicityError", "TriggerBindingBatch", "TriggerBindingError", "TriggerBindingMetadata",
-    "TriggerConflictError", "TriggerPlaceholderError", "TriggerTokenizerError", "TriggerTokenizerParityError",
+    "TriggerConflictError", "TriggerLiteralNotFoundError", "TriggerPlaceholderError", "TriggerTokenizerError", "TriggerTokenizerParityError",
     "TriggerTruncationError", "bind_trigger_batch", "bind_trigger_prompt",
     "create_private_ideogram4_fast_tokenizer", "find_literal_spans", "register_atomic_literal",
     "render_chat_prompt", "resolve_trigger_literal", "validate_fast_slow_tokenizer_parity",

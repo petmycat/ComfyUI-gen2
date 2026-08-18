@@ -278,7 +278,7 @@ def _mode_config(activator: Ideogram4TriggerActivator, mode: str) -> tuple[torch
 
 
 @torch.inference_mode()
-def encode_ideogram4_trigger(clip: Any, activator: Ideogram4TriggerActivator, text: str, mode: str = "semantic_only", placeholder: str = "[trigger]", literal: str = "<r1X1dOn9mA2>", max_length: int | None = None) -> tuple[list[list[Any]], TriggerDiagnostics]:
+def encode_ideogram4_trigger(clip: Any, activator: Ideogram4TriggerActivator, text: str, mode: str = "semantic_only", literal: str = "<r1X1dOn9mA2>", max_length: int | None = None) -> tuple[list[list[Any]], TriggerDiagnostics]:
     clip_model, language_model = resolve_qwen_transformer(clip)
     lock = _model_lock(language_model)
     private_tokenizer = create_private_ideogram4_fast_tokenizer(clip.tokenizer, literal=literal)
@@ -287,7 +287,6 @@ def encode_ideogram4_trigger(clip: Any, activator: Ideogram4TriggerActivator, te
         private_tokenizer,
         text,
         literal,
-        placeholder=placeholder,
         vocab_limit=vocab_limit,
         max_length=max_length,
         stock_literal=mode == "stock_literal",
