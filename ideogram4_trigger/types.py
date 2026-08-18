@@ -115,9 +115,18 @@ class Ideogram4TriggerActivator:
             "components": {"embedding": True, "te_adapter": True, "tap_adapters": False},
             "strengths": {"embedding": self.embedding_strength, "internal": self.internal_strength},
             "fingerprints": {
-                "phase": self.embedding.manifest.phase_fingerprint,
-                "source": self.embedding.manifest.source_fingerprint,
-                "config": self.embedding.manifest.config_fingerprint,
+                "embedding": {
+                    "phase": self.embedding.manifest.phase_fingerprint,
+                    "source": self.embedding.manifest.source_fingerprint,
+                    "config": self.embedding.manifest.config_fingerprint,
+                },
+                "te_adapter": {
+                    "phase": self.te_adapter.manifest.phase_fingerprint,
+                    "source": self.te_adapter.manifest.source_fingerprint,
+                    "config": self.te_adapter.manifest.config_fingerprint,
+                },
+                "compatible": self.embedding.manifest.compatibility_fingerprint
+                == self.te_adapter.manifest.compatibility_fingerprint,
             },
             "file_sha256": {
                 "embedding": self.embedding.identity.file_sha256,

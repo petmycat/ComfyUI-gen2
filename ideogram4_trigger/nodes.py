@@ -46,6 +46,10 @@ def _finite_strength(name: str, value: float) -> float:
 
 
 def compose_activator(embedding: TriggerEmbeddingArtifact, te_adapter: TriggerTEAdapterArtifact, embedding_strength: float = 1.0, internal_strength: float = 1.0) -> Ideogram4TriggerActivator:
+    if not isinstance(embedding, TriggerEmbeddingArtifact):
+        raise TypeError("embedding input is not an Ideogram4 V9 embedding artifact")
+    if not isinstance(te_adapter, TriggerTEAdapterArtifact):
+        raise TypeError("te_adapter input is not an Ideogram4 V9 TE module-LoRA artifact")
     if embedding.manifest.compatibility_fingerprint != te_adapter.manifest.compatibility_fingerprint:
         raise ValueError("Embedding and TE module-LoRA artifacts have incompatible fingerprints")
     return Ideogram4TriggerActivator(

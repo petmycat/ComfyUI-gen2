@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, Callable
@@ -18,6 +19,7 @@ class ComfyRuntime:
     optimized_attention_for_device: Callable[..., Any]
     make_prefetch_queue: Callable[..., Any]
     prefetch_queue_pop: Callable[..., Any]
+    prefetch_executes_core: bool
     source: str
 
 
@@ -52,8 +54,14 @@ class Ideogram4CompatibilityReport:
 def _optional_import(name: str) -> ModuleType | None:
     try:
         return importlib.import_module(name)
-    except Exception:
-        return None
+    except ModuleNotFoundError as exc:
+        if exc.name == name or name.startswith(f"{exc.name}."):
+            return None
+        raise UnsupportedComfyUIError(
+            f"ComfyUI runtime module {name!r} failed because dependency {exc.name!r} is missing"
+        ) from exc
+    except Exception as exc:
+        raise UnsupportedComfyUIError(f"ComfyUI runtime module {name!r} failed to import") from exc
 
 
 def _direct_layer_call(queue, device, layer, dtype=None, core=None, enable_graph=False):
@@ -66,14 +74,40 @@ def _no_prefetch_queue(layers, device, model_options=None):
     return None
 
 
+def _accepts_keyword(function: Callable[..., Any], name: str) -> bool:
+    try:
+        parameters = inspect.signature(function).parameters
+    except (TypeError, ValueError):
+        return False
+    return name in parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+
+
 def detect_comfy_runtime() -> ComfyRuntime | None:
     attention = _optional_import("comfy.ldm.modules.attention")
     if attention is None or not hasattr(attention, "optimized_attention_for_device"):
         return None
     prefetch = _optional_import("comfy.model_prefetch")
     if prefetch is not None and all(hasattr(prefetch, name) for name in ("make_prefetch_queue", "prefetch_queue_pop")):
-        return ComfyRuntime(attention.optimized_attention_for_device, prefetch.make_prefetch_queue, prefetch.prefetch_queue_pop, "comfy-native-prefetch")
-    return ComfyRuntime(attention.optimized_attention_for_device, _no_prefetch_queue, _direct_layer_call, "comfy-native-no-prefetch")
+        pop = prefetch.prefetch_queue_pop
+        executes_core = _accepts_keyword(pop, "core")
+        source = "comfy-native-prefetch-core" if executes_core else "comfy-native-prefetch-legacy"
+        return ComfyRuntime(
+            attention.optimized_attention_for_device,
+            prefetch.make_prefetch_queue,
+            pop,
+            executes_core,
+            source,
+        )
+    return ComfyRuntime(
+        attention.optimized_attention_for_device,
+        _no_prefetch_queue,
+        _direct_layer_call,
+        True,
+        "comfy-native-no-prefetch",
+    )
 
 
 def require_comfy_runtime() -> ComfyRuntime:
@@ -141,15 +175,35 @@ def validate_ideogram4_backend(clip: Any) -> Ideogram4CompatibilityReport:
         raise UnsupportedComfyUIError(
             f"Ideogram4 V9 requires hidden size {EXPECTED_HIDDEN_SIZE} and {IDEOGRAM4_LAYER_COUNT} layers; got {hidden_size}/{None if layers is None else len(layers)}"
         )
+    intermediate_size = getattr(config, "intermediate_size", None)
+    if not isinstance(intermediate_size, int) or intermediate_size <= 0:
+        raise UnsupportedComfyUIError("Ideogram4 backend lacks a valid Qwen intermediate size")
+    seen_down_projections: set[int] = set()
     for index, layer in enumerate(layers):
         mlp = getattr(layer, "mlp", None)
         down_proj = getattr(mlp, "down_proj", None)
         if down_proj is None or not callable(getattr(down_proj, "register_forward_hook", None)):
             raise UnsupportedComfyUIError(f"Layer {index} lacks a hookable unique mlp.down_proj module")
+        if id(down_proj) in seen_down_projections:
+            raise UnsupportedComfyUIError(f"Layer {index} reuses another layer's mlp.down_proj module")
+        seen_down_projections.add(id(down_proj))
+        in_features = getattr(down_proj, "in_features", None)
+        out_features = getattr(down_proj, "out_features", None)
+        if isinstance(in_features, int) and isinstance(out_features, int):
+            shape = (out_features, in_features)
+            if shape != (hidden_size, intermediate_size):
+                raise UnsupportedComfyUIError(
+                    f"Layer {index} mlp.down_proj logical shape {shape} does not match "
+                    f"({hidden_size}, {intermediate_size})"
+                )
     if not callable(getattr(language_model, "compute_freqs_cis", None)):
-        config = getattr(language_model, "config", None)
-        if config is None or not all(hasattr(config, name) for name in ("head_dim", "rope_theta", "rope_dims")):
-            raise UnsupportedComfyUIError("Backend lacks native Qwen3-VL MRoPE/position interfaces")
+        raise UnsupportedComfyUIError("Backend lacks native Qwen3-VL compute_freqs_cis()")
+    if not getattr(config, "interleaved_mrope", False) or not getattr(config, "rope_dims", None):
+        raise UnsupportedComfyUIError("Backend lacks native Qwen3-VL interleaved MRoPE configuration")
+    if not callable(getattr(clip, "load_model", None)):
+        raise UnsupportedComfyUIError("Connected CLIP does not provide load_model()")
+    if not callable(getattr(getattr(clip, "cond_stage_model", None), "set_clip_options", None)):
+        raise UnsupportedComfyUIError("Connected CLIP cannot set its execution device")
     if tokenizer is None:
         raise UnsupportedComfyUIError("Connected CLIP does not expose a tokenizer")
     try:
@@ -190,8 +244,10 @@ def load_clip_model(clip: Any, tokens: Any = None) -> Any:
         raise UnsupportedComfyUIError("Connected CLIP does not provide load_model()")
     try:
         return load_model(tokens) if tokens is not None else load_model()
-    except TypeError:
-        return load_model()
+    except TypeError as exc:
+        raise UnsupportedComfyUIError(
+            "Connected CLIP load_model() does not accept the native token payload"
+        ) from exc
 
 
 def compute_freqs_cis(language_model: Any, position_ids: Any, device: Any) -> Any:
