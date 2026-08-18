@@ -111,18 +111,17 @@ class Ideogram4TriggerTextEncode(io.ComfyNode):
             description="Strict native Ideogram4/Qwen3-VL V9 four-slot encoder returning standard CONDITIONING.",
             inputs=[
                 io.Clip.Input("clip"), CUSTOM_ACTIVATOR.Input("activator"),
-                io.String.Input("text", multiline=True, dynamic_prompts=True, default="[trigger]"),
+                io.String.Input("text", multiline=True, dynamic_prompts=True, default="<r1X1dOn9mA2>"),
                 io.Combo.Input("mode", options=list(RUNTIME_MODES), default="semantic_only"),
-                io.String.Input("placeholder", default="[trigger]"),
                 io.String.Input("literal", default="<r1X1dOn9mA2>"),
                 io.Int.Input("max_length", default=0, min=0, max=1048576, step=1, advanced=True),
             ], outputs=[io.Conditioning.Output("conditioning"), CUSTOM_DIAGNOSTICS.Output("diagnostics")],
         )
 
     @classmethod
-    def execute(cls, clip: Any, activator: Ideogram4TriggerActivator, text: str, mode: str, placeholder: str, literal: str, max_length: int) -> io.NodeOutput:
+    def execute(cls, clip: Any, activator: Ideogram4TriggerActivator, text: str, mode: str, literal: str, max_length: int) -> io.NodeOutput:
         conditioning, diagnostics = encode_ideogram4_trigger(
-            clip, activator, text, mode, placeholder, literal, max_length or None,
+            clip, activator, text, mode, literal, max_length or None,
         )
         return io.NodeOutput(conditioning, diagnostics)
 

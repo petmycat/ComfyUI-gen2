@@ -79,6 +79,8 @@ A template workflow is provided at `workflows/flux2_fun_control_2602.json`, with
 
 The V9 path exposes exactly five nodes: embedding loader, TE module-LoRA loader, activator composer, trigger text encoder, and diagnostics. Each trigger occurrence expands into four virtual slots, and the default `semantic_only` mode applies both the interpolated `[4,4096]` embedding and all 36 rank-4/alpha-4 TE module-LoRAs. Legacy single-token/shared residual/tap artifacts and `full`/`tap_only` modes are rejected.
 
+The text encoder expects the prompt to already contain the configured literal trigger. A typical workflow is `[trigger]` prompt text → `Gen2 StringReplace` → literal such as `<r1X1dOn9mA2>` → V9 text encoder. The encoder finds every literal occurrence directly; it does not replace placeholders itself. Missing literals fail closed. `stock_literal` still requires the literal to be present, but tokenizes it normally without atomic registration or four-slot expansion.
+
 Formal encoding is fail-closed: only a native backend identifiable as Ideogram4 + Qwen3-VL with 36 hookable `mlp.down_proj` layers and compatible MRoPE interfaces is accepted. Flux/Klein Qwen3-8B is explicitly unsupported even when its hidden size and layer count match. Real A2 artifact parity and visual smoke remain a release gate until matching artifacts, tokenizer/checkpoint, and golden tensors are available; synthetic contract/lifecycle tests are included locally.
 
 ### QwenImage ControlNet (outdated)
