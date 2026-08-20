@@ -7,7 +7,7 @@ from types import ModuleType
 from typing import Any, Callable
 
 from .trigger_binding import TriggerTokenizerError, resolve_huggingface_tokenizer
-from .types import EXPECTED_HIDDEN_SIZE, IDEOGRAM4_CAPTURE_LAYERS, IDEOGRAM4_LAYER_COUNT
+from .types import EXPECTED_HIDDEN_SIZE, IDEOGRAM4_LAYER_COUNT
 
 
 class UnsupportedComfyUIError(RuntimeError):
@@ -30,7 +30,6 @@ class Ideogram4CompatibilityReport:
     runtime_source: str
     hidden_size: int | None
     layer_count: int | None
-    capture_layers: tuple[int, ...]
     model_class: str
     clip_model_class: str
     tokenizer_class: str
@@ -43,7 +42,6 @@ class Ideogram4CompatibilityReport:
             "runtime_source": self.runtime_source,
             "hidden_size": self.hidden_size,
             "layer_count": self.layer_count,
-            "capture_layers": list(self.capture_layers),
             "model_class": self.model_class,
             "clip_model_class": self.clip_model_class,
             "tokenizer_class": self.tokenizer_class,
@@ -213,7 +211,7 @@ def validate_ideogram4_backend(clip: Any) -> Ideogram4CompatibilityReport:
             "Connected CLIP lacks an identifiable native Ideogram4/Qwen tokenizer wrapper"
         ) from exc
     return Ideogram4CompatibilityReport(
-        True, identity, runtime.source, int(hidden_size), len(layers), IDEOGRAM4_CAPTURE_LAYERS,
+        True, identity, runtime.source, int(hidden_size), len(layers),
         type(language_model).__name__, type(clip_model).__name__, type(tokenizer).__name__, None,
     )
 
@@ -231,7 +229,7 @@ def inspect_ideogram4_clip(clip: Any) -> Ideogram4CompatibilityReport:
         config = getattr(language_model, "config", None)
         return Ideogram4CompatibilityReport(
             False, _identity_text(clip_model, language_model), "unavailable" if runtime is None else runtime.source,
-            getattr(config, "hidden_size", None), None if layers is None else len(layers), IDEOGRAM4_CAPTURE_LAYERS,
+            getattr(config, "hidden_size", None), None if layers is None else len(layers),
             type(language_model).__name__ if language_model is not None else "unresolved",
             type(clip_model).__name__ if clip_model is not None else "unresolved",
             type(getattr(clip, "tokenizer", None)).__name__, str(exc),

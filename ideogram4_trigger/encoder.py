@@ -19,18 +19,17 @@ from .compatibility import (
 from .math_ops import (
     apply_conditioning_attention_mask,
     apply_masked_module_lora,
-    combine_post_layer_captures,
     interpolate_embedding,
     remap_atomic_token_ids,
     replace_trigger_embeddings,
 )
 from .trigger_binding import bind_trigger_prompt, create_private_ideogram4_fast_tokenizer
 from .types import (
-    IDEOGRAM4_CAPTURE_LAYERS,
     IDEOGRAM4_LAYER_COUNT,
     V9_LORA_RANK,
     ModuleLoRA,
     Ideogram4TriggerActivator,
+    PhaseCConditioningState,
     TriggerDiagnostics,
 )
 
@@ -68,7 +67,6 @@ class TriggerEncodingConfig:
     embedding: torch.Tensor | None
     te_layers: Mapping[int, ModuleLoRA]
     te_strength: float
-    capture_layers: tuple[int, ...] = IDEOGRAM4_CAPTURE_LAYERS
     apply_output_attention_mask: bool = True
 
 
@@ -76,13 +74,17 @@ class TriggerEncodingConfig:
 class EncoderOutput:
     conditioning: torch.Tensor
     attention_mask: torch.Tensor | None
-    captures: tuple[torch.Tensor, ...]
-    recurrent_hidden: torch.Tensor
     hooks_installed: int
     hooks_cleaned: bool
 
-    def as_conditioning(self) -> list[list[Any]]:
-        return [[self.conditioning, {"pooled_output": None, "attention_mask": self.attention_mask}]]
+    def as_conditioning(self, phase_c_state: PhaseCConditioningState | None = None) -> list[list[Any]]:
+        metadata: dict[str, Any] = {
+            "pooled_output": None,
+            "attention_mask": self.attention_mask,
+        }
+        if phase_c_state is not None:
+            metadata["gen2_phase_c_v2"] = phase_c_state
+        return [[self.conditioning, metadata]]
 
 
 _HOOK_CONTEXT: contextvars.ContextVar[HookContext | None] = contextvars.ContextVar("ideogram4_v9_hook_context", default=None)
@@ -146,10 +148,6 @@ def _call_decoder_layer(layer: Any, hidden: torch.Tensor, attention_bias: torch.
 def _validate_config(config: TriggerEncodingConfig, hidden_size: int, layer_count: int) -> None:
     if config.trigger_mask.dtype != torch.bool or config.trigger_mask.shape != config.virtual_token_indices.shape:
         raise ValueError("trigger_mask and virtual_token_indices must be aligned [B,L]")
-    if tuple(config.capture_layers) != tuple(sorted(set(config.capture_layers))):
-        raise ValueError("capture layers must be unique and strictly ascending")
-    if not config.capture_layers or any(index < 0 or index >= layer_count for index in config.capture_layers):
-        raise ValueError("capture layers contain an invalid layer index")
     active_slots = int(config.trigger_mask.sum().item())
     if config.atomic_token_id is None:
         if active_slots != 0 or config.lookup_token_id is not None or config.embedding is not None or config.te_layers:
@@ -308,13 +306,11 @@ def encode_qwen_layers(language_model: Any, token_ids: torch.Tensor, attention_m
     invocation_counts: dict[int, int] = {}
     token = None
     primary_error: BaseException | None = None
-    captures: list[torch.Tensor] = []
     cleaned = False
     try:
         token = _HOOK_CONTEXT.set(HookContext(trigger_mask, staged, invocation_counts))
         handles = _install_hooks(language_model, staged)
-        capture_set = set(config.capture_layers)
-        for index, layer in enumerate(layers):
+        for layer in layers:
             def core() -> None:
                 nonlocal hidden
                 hidden = _call_decoder_layer(layer, hidden, attention_bias, freqs_cis, optimized_attention)
@@ -330,8 +326,6 @@ def encode_qwen_layers(language_model: Any, token_ids: torch.Tensor, attention_m
             else:
                 runtime.prefetch_queue_pop(queue, hidden.device, layer)
                 core()
-            if index in capture_set:
-                captures.append(hidden.clone())
     except BaseException as exc:
         primary_error = exc
         raise
@@ -369,15 +363,57 @@ def encode_qwen_layers(language_model: Any, token_ids: torch.Tensor, attention_m
         raise RuntimeError(
             f"V9 module-LoRA hooks did not execute exactly once per layer: {unexpected_counts}"
         )
-    if len(captures) != len(config.capture_layers):
-        raise RuntimeError(f"captured {len(captures)} post-layer tensors, expected {len(config.capture_layers)}")
-    conditioning = combine_post_layer_captures(captures)
+    conditioning = hidden
     if not torch.isfinite(conditioning).all().item():
         raise RuntimeError("Ideogram4 V9 conditioning contains NaN or infinity")
     output_mask = None if attention_mask is None else attention_mask.to(conditioning.device)
     if config.apply_output_attention_mask:
         conditioning = apply_conditioning_attention_mask(conditioning, output_mask)
-    return EncoderOutput(conditioning, output_mask, tuple(captures), hidden, len(handles), cleaned)
+    return EncoderOutput(conditioning, output_mask, len(handles), cleaned)
+
+
+def _phase_c_conditioning_state(
+    output: EncoderOutput,
+    binding: Any,
+    activator: Ideogram4TriggerActivator,
+    mode: str,
+    literal: str,
+) -> PhaseCConditioningState | None:
+    if mode != "semantic_only" or binding.occurrence_count != 3:
+        return None
+    if len(binding.token_indices) != 12:
+        raise RuntimeError("Phase C V2 requires exactly 12 expanded trigger slots")
+    selected = output.conditioning[0, list(binding.token_indices)]
+    virtual_indices = torch.tensor(binding.virtual_token_indices, device=selected.device, dtype=torch.long)
+    occurrence_indices = torch.tensor(binding.occurrence_indices, device=selected.device, dtype=torch.long)
+    occurrence_states = torch.empty(
+        (3, 4, selected.shape[-1]),
+        device=selected.device,
+        dtype=selected.dtype,
+    )
+    assigned = torch.zeros((3, 4), device=selected.device, dtype=torch.bool)
+    for state, occurrence_index, virtual_index in zip(selected, occurrence_indices, virtual_indices):
+        occurrence = int(occurrence_index.item())
+        virtual = int(virtual_index.item())
+        if occurrence < 0 or occurrence >= 3 or virtual < 0 or virtual >= 4 or assigned[occurrence, virtual]:
+            raise RuntimeError("Phase C trigger occurrence/slot metadata is malformed")
+        occurrence_states[occurrence, virtual] = state
+        assigned[occurrence, virtual] = True
+    if not assigned.all().item():
+        raise RuntimeError("Phase C trigger metadata does not contain a complete 3x4 occurrence grid")
+    return PhaseCConditioningState(
+        schema="gen2.ideogram4-phase-c-v2.conditioning",
+        schema_version=1,
+        mode=mode,
+        literal=literal,
+        occurrence_count=3,
+        virtual_token_count=4,
+        conditioning_width=int(selected.shape[-1]),
+        occurrence_states=occurrence_states,
+        embedding_file_sha256=activator.embedding.identity.file_sha256,
+        te_adapter_file_sha256=activator.te_adapter.identity.file_sha256,
+        compatibility_fingerprint=activator.embedding.manifest.compatibility_fingerprint,
+    )
 
 
 def _mode_config(activator: Ideogram4TriggerActivator, mode: str) -> tuple[torch.Tensor | None, Mapping[int, ModuleLoRA], float]:
@@ -458,18 +494,24 @@ def encode_ideogram4_trigger(clip: Any, activator: Ideogram4TriggerActivator, te
         raise RuntimeError(
             f"V9 diagnostics mismatch: installed {output.hooks_installed} hooks, expected {expected_hooks}"
         )
+    phase_c_state = _phase_c_conditioning_state(output, binding, activator, mode, literal)
     diagnostics = TriggerDiagnostics(
         mode, binding.rendered_text, literal, binding.occurrence_count, binding.slot_count,
         binding.token_spans, binding.token_indices, binding.virtual_token_indices, binding.occurrence_indices,
         binding.atomic_token_id, binding.lookup_token_id, len(binding.input_ids), report.runtime_source,
         report.backend_identity, str(output.conditioning.device), str(output.conditioning.dtype),
         output.hooks_installed, output.hooks_cleaned,
-        (mode_notes[mode], f"post-layer captures={list(IDEOGRAM4_CAPTURE_LAYERS)}; layout=hidden-major-tap-minor"),
+        (
+            mode_notes[mode],
+            "conditioning uses the final Qwen recurrent hidden state; no multi-layer tap concatenation",
+            "Phase C V2 metadata attached" if phase_c_state is not None else "Phase C V2 metadata not routable",
+        ),
     )
-    return output.as_conditioning(), diagnostics
+    return output.as_conditioning(phase_c_state), diagnostics
 
 
 __all__ = [
     "EncoderOutput", "HookContext", "RUNTIME_MODES", "TriggerEncodingConfig", "encode_ideogram4_trigger",
+    "_phase_c_conditioning_state",
     "encode_qwen_layers",
 ]

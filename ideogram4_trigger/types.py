@@ -10,7 +10,6 @@ import torch
 
 EXPECTED_HIDDEN_SIZE = 4096
 IDEOGRAM4_LAYER_COUNT = 36
-IDEOGRAM4_CAPTURE_LAYERS = (0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 35)
 V9_VIRTUAL_TOKEN_COUNT = 4
 V9_LORA_RANK = 4
 V9_LORA_ALPHA = 4.0
@@ -138,8 +137,50 @@ class Ideogram4TriggerActivator:
             "te_layers": len(self.te_adapter.layers),
             "rank": V9_LORA_RANK,
             "alpha": V9_LORA_ALPHA,
-            "capture_layers": list(IDEOGRAM4_CAPTURE_LAYERS),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class PhaseCConditioningState:
+    schema: str
+    schema_version: int
+    mode: str
+    literal: str
+    occurrence_count: int
+    virtual_token_count: int
+    conditioning_width: int
+    occurrence_states: torch.Tensor
+    embedding_file_sha256: str
+    te_adapter_file_sha256: str
+    compatibility_fingerprint: tuple[str, str, str]
+
+    def __post_init__(self) -> None:
+        states = self.occurrence_states.detach().to(device="cpu", dtype=torch.float32).contiguous()
+        expected_shape = (self.occurrence_count, self.virtual_token_count, self.conditioning_width)
+        if tuple(states.shape) != expected_shape:
+            raise ValueError(
+                f"Phase C occurrence states must have shape {expected_shape}, got {tuple(states.shape)}"
+            )
+        if not torch.isfinite(states).all().item():
+            raise ValueError("Phase C occurrence states contain NaN or infinity")
+        if self.schema != "gen2.ideogram4-phase-c-v2.conditioning" or self.schema_version != 1:
+            raise ValueError("Unsupported Phase C conditioning metadata schema/version")
+        if self.conditioning_width != EXPECTED_HIDDEN_SIZE:
+            raise ValueError("Phase C occurrence states must use the final Qwen hidden width")
+        if len(self.compatibility_fingerprint) != 3 or any(
+            not isinstance(value, str) or len(value) != 64 for value in self.compatibility_fingerprint
+        ):
+            raise ValueError("Phase C compatibility fingerprint is malformed")
+        object.__setattr__(self, "occurrence_states", states)
+
+    @property
+    def routable(self) -> bool:
+        return (
+            self.mode == "semantic_only"
+            and self.occurrence_count == 3
+            and self.virtual_token_count == 4
+            and self.conditioning_width == EXPECTED_HIDDEN_SIZE
+        )
 
 
 @dataclass(frozen=True, slots=True)
