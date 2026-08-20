@@ -257,6 +257,17 @@ def _create_injection(model_root: Any, bindings: tuple[BoundV3Adapter, ...], own
     return PatcherInjection(inject=inject, eject=eject)
 
 
+def _execute_if_unowned_diffusion(
+    executor: Any,
+    owned_diffusion_model: Any,
+    args: tuple[Any, ...],
+    kwargs: Mapping[str, Any],
+) -> tuple[bool, Any]:
+    if executor.class_obj is owned_diffusion_model:
+        return False, None
+    return True, executor(*args, **dict(kwargs))
+
+
 def _extract_transformer_options(args: tuple[Any, ...], kwargs: Mapping[str, Any]) -> Mapping[str, Any]:
     value = kwargs.get("transformer_options")
     if isinstance(value, Mapping):
@@ -372,13 +383,25 @@ def apply_phase_c_strength(
 
     def install_runtime(target: Any) -> None:
         target_owner = object()
-        target_injection = _create_injection(base_model, bindings, target_owner)
+        target_base_model = getattr(target, "model", None)
+        target_diffusion_model = getattr(target_base_model, "diffusion_model", None)
+        if target_diffusion_model is not diffusion_model:
+            raise PhaseCRuntimeError("A Phase C MODEL clone changed its underlying diffusion model")
+        target_injection = _create_injection(target_base_model, bindings, target_owner)
 
         def diffusion_wrapper(executor, *args, **kwargs):
             if len(args) < 2 or not isinstance(args[0], torch.Tensor) or not isinstance(args[1], torch.Tensor):
                 raise PhaseCRuntimeError("Unexpected Ideogram4 diffusion wrapper signature")
-            if executor.class_obj is not diffusion_model:
-                raise PhaseCRuntimeError("Phase C wrapper was invoked by an unexpected diffusion model")
+            bypassed, bypass_result = _execute_if_unowned_diffusion(
+                executor, target_diffusion_model, args, kwargs
+            )
+            if bypassed:
+                if debug_logging:
+                    LOGGER.info(
+                        "[Gen2 Phase C debug] bypassing non-owned diffusion model %s during CFG/model-options reuse",
+                        type(executor.class_obj).__name__,
+                    )
+                return bypass_result
             input_tensor = args[0]
             canonical_timestep = args[1]
             options = _extract_transformer_options(args, kwargs)
@@ -433,6 +456,7 @@ __all__ = [
     "ATTACHMENT_KEY",
     "BoundV3Adapter",
     "PhaseCRuntimeError",
+    "_execute_if_unowned_diffusion",
     "apply_phase_c_strength",
     "extract_v3_adapters",
     "normalize_module_name",
