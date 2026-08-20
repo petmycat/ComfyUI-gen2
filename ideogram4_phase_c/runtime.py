@@ -11,7 +11,10 @@ from typing import Any, Mapping
 import torch
 import torch.nn.functional as F
 
-from ideogram4_trigger.types import PhaseCConditioningState
+try:
+    from ..ideogram4_trigger.types import PhaseCConditioningState
+except ImportError:
+    from ideogram4_trigger.types import PhaseCConditioningState
 
 from .router import PhaseCRouter, aggregate_projected_occurrences, effective_gates, normalize_canonical_timestep
 from .types import PhaseCRegistryModule, PhaseCRouterBundle
@@ -280,13 +283,13 @@ def _project_activator_states(
         expected_width = int(norm_shape[-1] if isinstance(norm_shape, (tuple, list)) else norm_shape)
         if expected_width != state.conditioning_width:
             raise PhaseCRuntimeError(
-                f"Ideogram llm_cond_norm expects width {expected_width}, but V9 Phase C requires final Qwen hidden width {state.conditioning_width}; the connected diffusion model uses an obsolete multi-layer conditioning contract"
+                f"Ideogram llm_cond_norm expects width {expected_width}, Phase C conditioning state has {state.conditioning_width}"
             )
     weight = getattr(projection, "weight", None)
     in_features = getattr(projection, "in_features", None)
     if isinstance(in_features, int) and in_features != state.conditioning_width:
         raise PhaseCRuntimeError(
-            f"Ideogram llm_cond_proj expects width {in_features}, but V9 Phase C requires final Qwen hidden width {state.conditioning_width}; the connected diffusion model uses an obsolete multi-layer conditioning contract"
+            f"Ideogram llm_cond_proj expects width {in_features}, Phase C conditioning state has {state.conditioning_width}"
         )
     projection_dtype = weight.dtype if isinstance(weight, torch.Tensor) else selected.dtype
     selected = selected.to(dtype=projection_dtype)

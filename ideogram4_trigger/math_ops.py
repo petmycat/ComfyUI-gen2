@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import torch
 import torch.nn.functional as F
 
@@ -42,6 +44,17 @@ def apply_masked_module_lora(output: torch.Tensor, inputs: torch.Tensor, trigger
     return output + update * trigger_mask.to(output.device, output.dtype).unsqueeze(-1)
 
 
+def combine_native_conditioning_layers(states: Sequence[torch.Tensor]) -> torch.Tensor:
+    if not states:
+        raise ValueError("at least one native Ideogram4 conditioning layer is required")
+    shape = states[0].shape
+    if len(shape) != 3 or any(item.shape != shape for item in states):
+        raise ValueError("native Ideogram4 conditioning layers must have identical [B,L,H] shapes")
+    stacked = torch.stack(tuple(states), dim=0)
+    arranged = stacked.permute(1, 2, 3, 0)
+    return arranged.reshape(shape[0], shape[1], shape[2] * len(states))
+
+
 def apply_conditioning_attention_mask(conditioning: torch.Tensor, attention_mask: torch.Tensor | None) -> torch.Tensor:
     if attention_mask is None:
         return conditioning
@@ -51,6 +64,6 @@ def apply_conditioning_attention_mask(conditioning: torch.Tensor, attention_mask
 
 
 __all__ = [
-    "apply_conditioning_attention_mask", "apply_masked_module_lora",
+    "apply_conditioning_attention_mask", "apply_masked_module_lora", "combine_native_conditioning_layers",
     "interpolate_embedding", "module_lora_update", "remap_atomic_token_ids", "replace_trigger_embeddings",
 ]

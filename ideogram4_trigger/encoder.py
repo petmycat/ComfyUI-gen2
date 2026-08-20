@@ -19,6 +19,7 @@ from .compatibility import (
 from .math_ops import (
     apply_conditioning_attention_mask,
     apply_masked_module_lora,
+    combine_native_conditioning_layers,
     interpolate_embedding,
     remap_atomic_token_ids,
     replace_trigger_embeddings,
@@ -26,6 +27,8 @@ from .math_ops import (
 from .trigger_binding import bind_trigger_prompt, create_private_ideogram4_fast_tokenizer
 from .types import (
     IDEOGRAM4_LAYER_COUNT,
+    IDEOGRAM4_NATIVE_CONDITIONING_LAYERS,
+    IDEOGRAM4_NATIVE_CONDITIONING_WIDTH,
     V9_LORA_RANK,
     ModuleLoRA,
     Ideogram4TriggerActivator,
@@ -74,6 +77,8 @@ class TriggerEncodingConfig:
 class EncoderOutput:
     conditioning: torch.Tensor
     attention_mask: torch.Tensor | None
+    native_layer_states: tuple[torch.Tensor, ...]
+    final_hidden: torch.Tensor
     hooks_installed: int
     hooks_cleaned: bool
 
@@ -306,11 +311,18 @@ def encode_qwen_layers(language_model: Any, token_ids: torch.Tensor, attention_m
     invocation_counts: dict[int, int] = {}
     token = None
     primary_error: BaseException | None = None
+    native_layer_states: list[torch.Tensor] = []
     cleaned = False
     try:
         token = _HOOK_CONTEXT.set(HookContext(trigger_mask, staged, invocation_counts))
         handles = _install_hooks(language_model, staged)
-        for layer in layers:
+        conditioning_layers = (
+            IDEOGRAM4_NATIVE_CONDITIONING_LAYERS
+            if len(layers) == IDEOGRAM4_LAYER_COUNT
+            else tuple(range(len(layers)))
+        )
+        native_layer_set = set(conditioning_layers)
+        for layer_index, layer in enumerate(layers):
             def core() -> None:
                 nonlocal hidden
                 hidden = _call_decoder_layer(layer, hidden, attention_bias, freqs_cis, optimized_attention)
@@ -326,6 +338,8 @@ def encode_qwen_layers(language_model: Any, token_ids: torch.Tensor, attention_m
             else:
                 runtime.prefetch_queue_pop(queue, hidden.device, layer)
                 core()
+            if layer_index in native_layer_set:
+                native_layer_states.append(hidden.clone())
     except BaseException as exc:
         primary_error = exc
         raise
@@ -363,13 +377,24 @@ def encode_qwen_layers(language_model: Any, token_ids: torch.Tensor, attention_m
         raise RuntimeError(
             f"V9 module-LoRA hooks did not execute exactly once per layer: {unexpected_counts}"
         )
-    conditioning = hidden
+    if len(native_layer_states) != len(conditioning_layers):
+        raise RuntimeError(
+            f"collected {len(native_layer_states)} native Ideogram4 conditioning layers, "
+            f"expected {len(conditioning_layers)}"
+        )
+    conditioning = combine_native_conditioning_layers(native_layer_states)
+    expected_conditioning_width = hidden_size * len(conditioning_layers)
+    if conditioning.shape[-1] != expected_conditioning_width:
+        raise RuntimeError(
+            f"native Ideogram4 conditioning width is {conditioning.shape[-1]}, "
+            f"expected {expected_conditioning_width}"
+        )
     if not torch.isfinite(conditioning).all().item():
         raise RuntimeError("Ideogram4 V9 conditioning contains NaN or infinity")
     output_mask = None if attention_mask is None else attention_mask.to(conditioning.device)
     if config.apply_output_attention_mask:
         conditioning = apply_conditioning_attention_mask(conditioning, output_mask)
-    return EncoderOutput(conditioning, output_mask, len(handles), cleaned)
+    return EncoderOutput(conditioning, output_mask, tuple(native_layer_states), hidden, len(handles), cleaned)
 
 
 def _phase_c_conditioning_state(
@@ -503,7 +528,7 @@ def encode_ideogram4_trigger(clip: Any, activator: Ideogram4TriggerActivator, te
         output.hooks_installed, output.hooks_cleaned,
         (
             mode_notes[mode],
-            "conditioning uses the final Qwen recurrent hidden state; no multi-layer tap concatenation",
+            f"conditioning uses Ideogram4 native {len(IDEOGRAM4_NATIVE_CONDITIONING_LAYERS)}-layer Qwen feature aggregation ({IDEOGRAM4_NATIVE_CONDITIONING_WIDTH} dimensions); no trainable tap adapters",
             "Phase C V2 metadata attached" if phase_c_state is not None else "Phase C V2 metadata not routable",
         ),
     )
