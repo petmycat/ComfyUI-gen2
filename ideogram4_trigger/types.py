@@ -10,6 +10,8 @@ import torch
 
 EXPECTED_HIDDEN_SIZE = 4096
 IDEOGRAM4_LAYER_COUNT = 36
+IDEOGRAM4_NATIVE_CONDITIONING_LAYERS = (0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 35)
+IDEOGRAM4_NATIVE_CONDITIONING_WIDTH = EXPECTED_HIDDEN_SIZE * len(IDEOGRAM4_NATIVE_CONDITIONING_LAYERS)
 V9_VIRTUAL_TOKEN_COUNT = 4
 V9_LORA_RANK = 4
 V9_LORA_ALPHA = 4.0
@@ -165,8 +167,8 @@ class PhaseCConditioningState:
             raise ValueError("Phase C occurrence states contain NaN or infinity")
         if self.schema != "gen2.ideogram4-phase-c-v2.conditioning" or self.schema_version != 1:
             raise ValueError("Unsupported Phase C conditioning metadata schema/version")
-        if self.conditioning_width != EXPECTED_HIDDEN_SIZE:
-            raise ValueError("Phase C occurrence states must use the final Qwen hidden width")
+        if self.conditioning_width != IDEOGRAM4_NATIVE_CONDITIONING_WIDTH:
+            raise ValueError("Phase C occurrence states must use the native Ideogram4 conditioning width")
         if len(self.compatibility_fingerprint) != 3 or any(
             not isinstance(value, str) or len(value) != 64 for value in self.compatibility_fingerprint
         ):
@@ -179,7 +181,7 @@ class PhaseCConditioningState:
             self.mode == "semantic_only"
             and self.occurrence_count == 3
             and self.virtual_token_count == 4
-            and self.conditioning_width == EXPECTED_HIDDEN_SIZE
+            and self.conditioning_width == IDEOGRAM4_NATIVE_CONDITIONING_WIDTH
         )
 
 
