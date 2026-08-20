@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import torch
 import torch.nn.functional as F
 
@@ -44,17 +42,6 @@ def apply_masked_module_lora(output: torch.Tensor, inputs: torch.Tensor, trigger
     return output + update * trigger_mask.to(output.device, output.dtype).unsqueeze(-1)
 
 
-def combine_post_layer_captures(captures: Sequence[torch.Tensor]) -> torch.Tensor:
-    if not captures:
-        raise ValueError("at least one capture is required")
-    shape = captures[0].shape
-    if len(shape) != 3 or any(item.shape != shape for item in captures):
-        raise ValueError("captures must have identical [B,L,H] shapes")
-    stacked = torch.stack(tuple(captures), dim=0)
-    arranged = stacked.permute(1, 2, 3, 0)
-    return arranged.reshape(shape[0], shape[1], shape[2] * len(captures))
-
-
 def apply_conditioning_attention_mask(conditioning: torch.Tensor, attention_mask: torch.Tensor | None) -> torch.Tensor:
     if attention_mask is None:
         return conditioning
@@ -64,6 +51,6 @@ def apply_conditioning_attention_mask(conditioning: torch.Tensor, attention_mask
 
 
 __all__ = [
-    "apply_conditioning_attention_mask", "apply_masked_module_lora", "combine_post_layer_captures",
+    "apply_conditioning_attention_mask", "apply_masked_module_lora",
     "interpolate_embedding", "module_lora_update", "remap_atomic_token_ids", "replace_trigger_embeddings",
 ]
