@@ -24,8 +24,7 @@ Thumbs.db
 # Logs
 *.log
 
-assets/
-docs/
-tests/
-workflows/
+# Local documentation and archived implementations
+/docs/
+/legacy/
 .cursor/
