@@ -1,3 +1,2 @@
-scipy
-safetensors
-transformers
+# The registered nodes use packages supplied by ComfyUI.
+# Install the separate LanPaint custom node pack to use the LanPaint patch.
