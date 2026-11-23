@@ -20,13 +20,15 @@ Connect the Input Panel's **PANEL_LINK** output to this node to keep each run's 
 
 ### Gen2 LoRA Save
 
-Choose a LoRA in **file**, enter its **trigger**, **model**, and **type**, then queue the node. It moves the file to `models/loras/gen2/<number>/<model>/<type>/` and preserves its filename. Numbering starts at 1 and continues after the highest existing numbered folder.
+Choose a LoRA in **file**, enter its **trigger**, **model**, and **type**, then queue the node. With **new_number** on (the default), Save creates the next numbered folder under `models/loras/gen2/`, starting at 1. Turn **new_number** off and enter an existing **number** to group more LoRAs there. For example, `3/q21/style/` and `3/k2/style/` can each hold a style LoRA.
+
+Turn **use_name** on to enter a **name** under the type folder. For example, `3/q21/characters/my_character/` and `3/q21/characters/another_character/` can each hold a LoRA and its own `trigger.json`. With **use_name** off, Save uses the type folder directly. Each destination holds one LoRA with its original filename. An occupied destination produces a failure message and preserves the existing files.
 
 The adjacent `trigger.json` contains one UTF-8 JSON string. For example, entering `my style` writes `"my style"`. Leading and trailing whitespace is trimmed. Connect **status** to a string preview to see the destination path or the reason a save failed.
 
 ### Gen2 LoRA Load
 
-Connect a string containing the folder number to **number** and enter **model** and **type** exactly as saved. For example, `3`, `q21`, and `style` select `models/loras/gen2/3/q21/style/`.
+Connect the folder number as text to the **string** input and enter **model** and **type** exactly as saved. For example, `3`, `q21`, and `style` select `models/loras/gen2/3/q21/style/`. To read a named entry, turn **use_name** on and enter the same **name** used when saving.
 
 Connect **lora_name** (COMBO) to the core model-only LoRA loader’s **lora_name** input. Connect **trigger** (STRING) to a prompt or text preview to use the exact string stored in `trigger.json`.
 
