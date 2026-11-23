@@ -23,6 +23,7 @@ class LoRASaveTests(unittest.TestCase):
         self.choices = []
         folders = SimpleNamespace(
             models_dir=str(models),
+            folder_names_and_paths={"loras": ([str(self.loras)], {".pt", ".safetensors"})},
             get_filename_list=lambda category: self.choices.copy(),
             get_full_path_or_raise=self.resolve_choice,
         )
@@ -126,6 +127,100 @@ class LoRASaveTests(unittest.TestCase):
             name = json.loads((destination / "trigger.json").read_text(encoding="utf-8"))
             self.assertEqual((destination / name).read_bytes(), name.encode())
             self.assertFalse((self.loras / name).exists())
+
+    def test_existing_number_supports_models_named_children_and_an_entry_at_the_type(self):
+        def save(filename, model, **options):
+            self.create_source(filename)
+            message, = self.node.save(filename, filename, model, "characters", **options)
+            self.assertTrue(message.startswith("Successfully created "), message)
+
+        save("mouse.pt", "q21", use_name=True, name="Mouse")
+        save("cat.pt", "q21", new_number=False, number="1", use_name=True, name="Cat")
+        save("group.pt", "q21", new_number=False, number="1", name="../ignored")
+        save("another.pt", "k2", new_number=False, number="1")
+        self.assertEqual([p.name for p in self.gen2.iterdir()], ["1"])
+        paths = {"q21/characters/Mouse": "mouse.pt", "q21/characters/Cat": "cat.pt",
+                 "q21/characters": "group.pt", "k2/characters": "another.pt"}
+        for path, expected in paths.items():
+            folder = self.gen2 / "1" / path
+            self.assertEqual((folder / expected).read_bytes(), expected.encode())
+            self.assertEqual(json.loads((folder / "trigger.json").read_bytes()), expected)
+
+    def test_manual_number_and_enabled_name_must_be_valid_before_move(self):
+        source = self.create_source("model.pt")
+        for options in ({"new_number": False}, {"new_number": False, "number": "../1"},
+                        {"new_number": False, "number": "3"}, {"use_name": True},
+                        {"use_name": True, "name": "../other"}):
+            with self.subTest(options=options):
+                message, = self.node.save(source.name, "art", "q21", "style", **options)
+                self.assertTrue(message.startswith("Failed: "), message)
+                self.assertTrue(source.is_file())
+                self.assertFalse(self.gen2.exists())
+
+    def test_manual_save_preserves_existing_files_even_in_partial_entries(self):
+        incoming = self.create_source("incoming.pt")
+        for occupied in ("incoming.pt", "another.safetensors", "trigger.json"):
+            folder = self.gen2 / "3/q21/style" / occupied
+            folder.mkdir(parents=True)
+            (folder / occupied).write_bytes(b"keep")
+            with self.subTest(occupied=occupied):
+                message, = self.node.save(incoming.name, "art", "q21", "style",
+                                          new_number=False, number="3", use_name=True, name=occupied)
+                self.assertTrue(message.startswith("Failed: "), message)
+                self.assertEqual((folder / occupied).read_bytes(), b"keep")
+                self.assertEqual([p.name for p in folder.iterdir()], [occupied])
+                self.assertTrue(incoming.is_file())
+
+    def test_manual_save_failure_preserves_siblings_and_existing_parents(self):
+        source = self.create_source("model.pt")
+        kind = self.gen2 / "7/q21/style"
+        sibling = kind / "existing"
+        sibling.mkdir(parents=True)
+        (sibling / "trigger.json").write_bytes(b'"old"')
+        with patch.object(Path, "write_bytes", side_effect=OSError("disk full")):
+            message, = self.node.save(source.name, "art", "q21", "style",
+                                      new_number=False, number="7", use_name=True, name="new")
+        self.assertEqual(message, "Failed: disk full")
+        self.assertEqual(source.read_bytes(), b"model.pt")
+        self.assertEqual(list(kind.iterdir()), [sibling])
+        self.assertEqual((sibling / "trigger.json").read_bytes(), b'"old"')
+
+    def test_linked_subfolder_cannot_redirect_a_manual_save_outside_the_number(self):
+        source = self.create_source("model.pt")
+        directory = self.gen2 / "3"
+        directory.mkdir(parents=True)
+        outside = self.loras / "outside"
+        outside.mkdir()
+        try:
+            (directory / "q21").symlink_to(outside, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"Directory symlinks unavailable: {error}")
+        message, = self.node.save(source.name, "art", "q21", "style", new_number=False, number="3")
+        self.assertTrue(message.startswith("Failed: "), message)
+        self.assertTrue(source.is_file())
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_same_destination_concurrent_saves_create_one_matching_pair(self):
+        choices = ["first.pt", "second.pt"]
+        (self.gen2 / "3").mkdir(parents=True)
+        for choice in choices:
+            self.create_source(choice)
+        barrier = Barrier(len(choices))
+
+        def save(choice):
+            barrier.wait(timeout=10)
+            message, = self.node.save(choice, choice, "q21", "style", new_number=False, number="3")
+            return message
+
+        with ThreadPoolExecutor(max_workers=len(choices)) as pool:
+            results = dict(zip(choices, pool.map(save, choices)))
+        winner, = (name for name in choices if results[name].startswith("Successfully created "))
+        loser, = (name for name in choices if results[name].startswith("Failed: "))
+        folder = self.gen2 / "3/q21/style"
+        self.assertEqual({p.name for p in folder.iterdir()}, {"trigger.json", winner})
+        self.assertEqual(json.loads((folder / "trigger.json").read_bytes()), winner)
+        self.assertFalse((self.loras / winner).exists())
+        self.assertTrue((self.loras / loser).is_file())
 
 
 if __name__ == "__main__":

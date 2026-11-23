@@ -6,7 +6,7 @@ from pathlib import Path
 
 import folder_paths
 
-from .lora_save import _check_folder_name
+from .lora_save import _check_folder_name, _number_component
 
 
 class _ComboSocket(str):
@@ -18,15 +18,16 @@ class _ComboSocket(str):
         return super().__ne__(other)
 
 
-def _folder_parts(number, model, kind):
+def _folder_parts(number, model, kind, use_name, name):
     if number is not None:
-        number = number.strip()
-        if not (number.isascii() and number.isdecimal()):
-            raise ValueError("number must be a string of digits, such as '3'.")
-    for value, field in ((model, "model"), (kind, "type")):
+        number = _number_component(number)
+    fields = [(model, "model"), (kind, "type")]
+    if use_name:
+        fields.append((name, "name"))
+    for value, field in fields:
         if value is not None:
             _check_folder_name(value, field)
-    return number, model, kind
+    return (number, *(value for value, _ in fields))
 
 
 class Gen2_LoRALoad:
@@ -37,17 +38,28 @@ class Gen2_LoRALoad:
 
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {
-            "number": ("STRING", {"forceInput": True}),
-            "model": ("STRING", {"default": "", "dynamicPrompts": False}),
-            "type": ("STRING", {"default": "", "dynamicPrompts": False}),
-        }}
+        return {
+            "required": {
+                "number": ("STRING", {"forceInput": True, "display_name": "string",
+                                      "tooltip": "Folder number as text, for example 3."}),
+                "model": ("STRING", {"default": "", "dynamicPrompts": False}),
+                "type": ("STRING", {"default": "", "dynamicPrompts": False}),
+            },
+            "optional": {
+                "use_name": ("BOOLEAN", {"default": False, "socketless": True,
+                                         "tooltip": "Look inside a named subfolder of type."}),
+                "name": ("STRING", {"default": "", "dynamicPrompts": False, "socketless": True}),
+            },
+        }
 
     @classmethod
-    def IS_CHANGED(cls, number, model, type):
+    def IS_CHANGED(cls, number, model, type, use_name=False, name=""):
         # Linked values are unavailable during ComfyUI's cache check. Watch the
         # matching folders so unchanged files can still reuse downstream sampling.
-        parts = _folder_parts(number, model, type)
+        if use_name is None:
+            # A prompt linked this switch, so even the lookup depth is unknown.
+            return float("nan")
+        parts = _folder_parts(number, model, type, use_name, name)
         pattern = "/".join(escape(part) if part is not None else "*" for part in parts)
         local = Path(folder_paths.models_dir) / "loras"
         roots = folder_paths.folder_names_and_paths["loras"][0]
@@ -67,8 +79,8 @@ class Gen2_LoRALoad:
                 break
         return tuple(signature)
 
-    def load(self, number: str, model: str, type: str) -> tuple[str, str]:
-        parts = _folder_parts(number, model, type)
+    def load(self, number: str, model: str, type: str, use_name: bool = False, name: str = "") -> tuple[str, str]:
+        parts = _folder_parts(number, model, type, use_name, name)
         relative = Path("gen2", *parts)
         loras = Path(folder_paths.models_dir) / "loras"
         folder = loras / relative

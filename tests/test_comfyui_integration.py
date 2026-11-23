@@ -231,22 +231,65 @@ def run_worker(base_directory):
             }},
             "7": {"class_type": "PreviewAny", "inputs": {"source": ["6", 0]}},
         }
-        valid, error, output_nodes, node_errors = asyncio.run(execution.validate_prompt("gen2-lora-load", lookup, None))
-        assert valid and set(output_nodes) == {"3", "4", "7"}, (error, node_errors)
-        executor.execute(copy.deepcopy(lookup), "gen2-lora-load", {"client_id": "test"}, output_nodes)
-        assert executor.success, executor.status_messages
-        lookup_outputs = executor.history_result["outputs"]
-        lora_name, = lookup_outputs["3"]["text"]
-        assert lora_name == str((destination / source.name).relative_to(loras)), lora_name
-        assert Path(folder_paths.get_full_path_or_raise("loras", lora_name)) == destination / source.name
-        loaded_trigger, = lookup_outputs["4"]["text"]
-        assert loaded_trigger == trigger, loaded_trigger
+        def check_lookup(prompt_id, folder, expected_trigger):
+            submission = copy.deepcopy(lookup)
+            valid, error, output_nodes, node_errors = asyncio.run(execution.validate_prompt(prompt_id, submission, None))
+            assert valid and set(output_nodes) == {"3", "4", "7"}, (error, node_errors)
+            executor.execute(submission, prompt_id, {"client_id": "test"}, output_nodes)
+            assert executor.success, executor.status_messages
+            results = executor.history_result["outputs"]
+            lora_name, = results["3"]["text"]
+            expected_file = folder / source.name
+            assert lora_name == str(expected_file.relative_to(loras)), lora_name
+            assert Path(folder_paths.get_full_path_or_raise("loras", lora_name)) == expected_file
+            loaded_trigger, = results["4"]["text"]
+            assert loaded_trigger == expected_trigger, (loaded_trigger, expected_trigger)
+
+        check_lookup("gen2-lora-load", destination, trigger)
         updated_trigger = "new  trigger"
         (destination / "trigger.json").write_text(json.dumps(updated_trigger), encoding="utf-8")
-        executor.execute(copy.deepcopy(lookup), "gen2-lora-reread", {"client_id": "test"}, output_nodes)
-        assert executor.success, executor.status_messages
-        loaded_trigger, = executor.history_result["outputs"]["4"]["text"]
-        assert loaded_trigger == updated_trigger, "Cached trigger was reused after the file changed"
+        check_lookup("gen2-lora-reread", destination, updated_trigger)
+
+        # Group styles for two models and two separately named characters under 3.
+        # Use the same adapter filename throughout to exercise full relative paths.
+        records = [
+            ("q21", "style", "", "Qwen style"),
+            ("k2", "style", "", "Krea style"),
+            ("q21", "characters", "my_character", 'character "one"'),
+            ("q21", "characters", "another_character", "角色  二"),
+        ]
+        for index, (model, kind, name, value) in enumerate(records):
+            source.write_bytes(test_adapter)
+            organize_prompt["1"]["inputs"] = {
+                "file": str(source.relative_to(loras)), "trigger": value, "model": model, "type": kind,
+                "new_number": index == 0, "number": "2" if index == 0 else "3",
+                "use_name": bool(name), "name": name or "ignored",
+            }
+            execute_organizer(f"gen2-save-group-{index}")
+            message, = executor.history_result["outputs"]["2"]["text"]
+            assert message.startswith("Successfully created"), message
+            assert not source.exists()
+        assert not (loras / "gen2" / "4").exists()
+
+        duplicate = source.with_name("duplicate.safetensors")
+        duplicate.write_bytes(b"second adapter")
+        organize_prompt["1"]["inputs"].update(file=str(duplicate.relative_to(loras)), trigger="replacement trigger")
+        execute_organizer("gen2-duplicate-named-save")
+        message, = executor.history_result["outputs"]["2"]["text"]
+        assert message.startswith("Failed:"), message
+        assert duplicate.read_bytes() == b"second adapter"
+
+        lookup["1"]["inputs"]["value"] = "3"
+        for index, (model, kind, name, value) in enumerate(records):
+            lookup["2"]["inputs"] = {
+                "number": ["1", 0], "model": model, "type": kind, "use_name": bool(name), "name": name or "ignored",
+            }
+            folder = loras / "gen2" / "3" / model / kind / name
+            check_lookup(f"gen2-lookup-group-{index}", folder, value)
+            assert (folder / source.name).read_bytes() == test_adapter
+        # Requeue the same named lookup after editing its own trigger on disk.
+        (folder / "trigger.json").write_text('"updated named trigger"', encoding="utf-8")
+        check_lookup("gen2-reread-named-trigger", folder, "updated named trigger")
 
         report = {
             "comfyui_version": comfyui_version.__version__, "device": "cpu",

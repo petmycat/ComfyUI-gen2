@@ -82,6 +82,20 @@ class LoRALoadTests(unittest.TestCase):
             with self.subTest(contents=contents), self.assertRaisesRegex(ValueError, "trigger.json"):
                 self.load()
 
+    def test_name_only_selects_a_subfolder_when_enabled(self):
+        nested = self.folder / "cat [ink]"
+        nested.mkdir()
+        model = nested / "sketch.pt"
+        model.touch()
+        (nested / "trigger.json").write_text('"cat  ink"', encoding="utf-8")
+        self.assertEqual(self.node.load("3", "q21", "style", use_name=True, name=nested.name),
+                         (str(model.relative_to(self.loras)), "cat  ink"))
+        self.assertEqual(self.node.load("3", "q21", "style", use_name=False, name="../unused"),
+                         (str(self.model.relative_to(self.loras)), "sketch"))
+        for bad_name in ("", "../", "cat/ink"):
+            with self.subTest(name=bad_name), self.assertRaisesRegex(ValueError, "name"):
+                self.node.load("3", "q21", "style", use_name=True, name=bad_name)
+
     def test_cache_fingerprint_tracks_trigger_edits_with_wired_number(self):
         original = self.node.IS_CHANGED(None, "q21", "style")
         self.assertEqual(original, self.node.IS_CHANGED(None, "q21", "style"))
