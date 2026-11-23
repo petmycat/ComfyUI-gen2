@@ -10,6 +10,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {}
 # unrelated nodes. The ignored legacy archive is intentionally not registered.
 for module_name, label in (
     ("gen2.api_panel_nodes", "API panels"),
+    ("gen2.lora_nodes", "LoRA utilities"),
     ("gen2.misc_nodes", "Misc utilities"),
     ("gen2.lanpaint_nodes", "LanPaint"),
     ("experimental.f2k", "Experimental Flux.2 Klein fix"),

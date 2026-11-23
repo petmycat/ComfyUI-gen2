@@ -2,8 +2,8 @@
 
 Set COMFYUI_PATH to a checkout and optionally COMFYUI_TEST_DEPS to a temporary
 pip --target directory. This test uses --cpu, no checkpoints and no HTTP server.
-Only websocket delivery is replaced with an in-memory sink; ComfyUI's loader,
-validator, scheduler, executor and node API remain real.
+Websocket delivery uses an in-memory sink. ComfyUI's loader, validator,
+scheduler, executor and node API run against temporary test inputs.
 """
 
 import asyncio
@@ -15,13 +15,14 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run_worker():
+def run_worker(base_directory):
     core = Path(os.environ["COMFYUI_PATH"]).resolve()
     if not (core / "execution.py").is_file():
         raise ValueError("COMFYUI_PATH must point to a ComfyUI source checkout")
@@ -29,21 +30,24 @@ def run_worker():
     if os.environ.get("COMFYUI_TEST_DEPS"):
         paths.append(str(Path(os.environ["COMFYUI_TEST_DEPS"]).resolve()))
     sys.path[:0] = paths
-    sys.argv = ["gen2-cpu-integration", "--cpu", "--disable-auto-launch"]
+    sys.argv = ["gen2-cpu-integration", "--cpu", "--disable-auto-launch", "--base-directory", base_directory]
     import comfy.options
     comfy.options.enable_args_parsing()
     import comfyui_version
     import execution
     import folder_paths
     import nodes
+    import torch
     from PIL import Image
+    from safetensors.torch import save as serialize_tensors
 
     loaded = asyncio.run(nodes.load_custom_node(str(ROOT)))
     if not loaded:
         raise AssertionError("ComfyUI could not load the node pack")
     expected_nodes = {
         "Gen2_InputPanel", "Gen2_OutputPanel", "Gen2_Checkerboard",
-        "Gen2_StringReplace", "Gen2_LanPaintSoftDenoisePatch", "Gen2_Flux2KleinFix",
+        "Gen2_StringReplace", "Gen2_LanPaintSoftDenoisePatch", "Gen2_Flux2KleinFix", "Gen2_LoRASave",
+        "Gen2_LoRALoad",
     }
     missing = expected_nodes - nodes.NODE_CLASS_MAPPINGS.keys()
     if missing:
@@ -158,9 +162,98 @@ def run_worker():
         with Image.open(outputs / rerun_ref["subfolder"] / rerun_ref["filename"]) as updated:
             assert updated.getpixel((0, 0)) == (0, 0, 255), "Cached old upload was reused"
 
+        loras = Path(base_directory) / "models" / "loras"
+        source = loras / "incoming" / "sample.safetensors"
+        source.parent.mkdir(parents=True)
+        trigger = '猫  "illustration" {literal}'
+        organize_prompt = {"1": {"class_type": "Gen2_LoRASave", "inputs": {
+            "file": str(source.relative_to(loras)), "trigger": trigger, "model": "q21", "type": "style",
+        }}}
+
+        def execute_organizer(prompt_id):
+            submission = copy.deepcopy(organize_prompt)
+            valid, error, output_nodes, node_errors = asyncio.run(execution.validate_prompt(prompt_id, submission, None))
+            assert valid, (error, node_errors)
+            assert set(output_nodes) == set(submission), output_nodes
+            executor.execute(submission, prompt_id, {"client_id": "test"}, output_nodes)
+            assert executor.success, executor.status_messages
+
+        preview_node = core / "comfy_extras" / "nodes_preview_any.py"
+        assert asyncio.run(nodes.load_custom_node(str(preview_node), module_parent="comfy_extras"))
+        test_adapter = serialize_tensors({
+            "lora_unet_proj.lora_down.weight": torch.ones(1, 2),
+            "lora_unet_proj.lora_up.weight": torch.ones(2, 1),
+        })
+        for index, content in enumerate((b"first LoRA", test_adapter), start=1):
+            source.write_bytes(content)
+            if index == 2:
+                organize_prompt["2"] = {"class_type": "PreviewAny", "inputs": {"source": ["1", 0]}}
+            execute_organizer(f"gen2-lora-{index}")
+            destination = loras / "gen2" / str(index) / "q21" / "style"
+            assert not source.exists(), "Standalone node did not move the selected file"
+            assert (destination / source.name).read_bytes() == content
+            assert json.loads((destination / "trigger.json").read_text(encoding="utf-8")) == trigger
+        message, = executor.history_result["outputs"]["2"]["text"]
+        assert message.startswith("Successfully created"), message
+        execute_organizer("gen2-lora-stale-selection")
+        message, = executor.history_result["outputs"]["2"]["text"]
+        assert message.startswith("Failed:"), message
+        assert not (loras / "gen2" / "3").exists()
+
+        # A two-by-two linear layer lets the real model-only loader apply the
+        # saved adapter on CPU without downloading a diffusion checkpoint.
+        class TinyTestModel:
+            @classmethod
+            def INPUT_TYPES(cls):
+                return {"required": {}}
+
+            RETURN_TYPES = ("MODEL",)
+            FUNCTION = "make_model"
+
+            def make_model(self):
+                model = torch.nn.Module()
+                model.diffusion_model = torch.nn.ModuleDict({"proj": torch.nn.Linear(2, 2, bias=False)})
+                model.model_config = SimpleNamespace(unet_config={})
+                cpu = torch.device("cpu")
+                return (comfy.model_patcher.ModelPatcher(model, cpu, cpu),)
+
+        nodes.NODE_CLASS_MAPPINGS["Gen2TestTinyModel"] = TinyTestModel
+        primitives = core / "comfy_extras" / "nodes_primitive.py"
+        assert asyncio.run(nodes.load_custom_node(str(primitives), module_parent="comfy_extras"))
+        lookup = {
+            "1": {"class_type": "PrimitiveString", "inputs": {"value": "2"}},
+            "2": {"class_type": "Gen2_LoRALoad", "inputs": {"number": ["1", 0], "model": "q21", "type": "style"}},
+            "3": {"class_type": "PreviewAny", "inputs": {"source": ["2", 0]}},
+            "4": {"class_type": "PreviewAny", "inputs": {"source": ["2", 1]}},
+            "5": {"class_type": "Gen2TestTinyModel", "inputs": {}},
+            "6": {"class_type": "LoraLoaderModelOnly", "inputs": {
+                "model": ["5", 0], "lora_name": ["2", 0], "strength_model": 1.0,
+            }},
+            "7": {"class_type": "PreviewAny", "inputs": {"source": ["6", 0]}},
+        }
+        valid, error, output_nodes, node_errors = asyncio.run(execution.validate_prompt("gen2-lora-load", lookup, None))
+        assert valid and set(output_nodes) == {"3", "4", "7"}, (error, node_errors)
+        executor.execute(copy.deepcopy(lookup), "gen2-lora-load", {"client_id": "test"}, output_nodes)
+        assert executor.success, executor.status_messages
+        lookup_outputs = executor.history_result["outputs"]
+        lora_name, = lookup_outputs["3"]["text"]
+        assert lora_name == str((destination / source.name).relative_to(loras)), lora_name
+        assert Path(folder_paths.get_full_path_or_raise("loras", lora_name)) == destination / source.name
+        loaded_trigger, = lookup_outputs["4"]["text"]
+        assert loaded_trigger == trigger, loaded_trigger
+        updated_trigger = "new  trigger"
+        (destination / "trigger.json").write_text(json.dumps(updated_trigger), encoding="utf-8")
+        executor.execute(copy.deepcopy(lookup), "gen2-lora-reread", {"client_id": "test"}, output_nodes)
+        assert executor.success, executor.status_messages
+        loaded_trigger, = executor.history_result["outputs"]["4"]["text"]
+        assert loaded_trigger == updated_trigger, "Cached trigger was reused after the file changed"
+
         report = {
             "comfyui_version": comfyui_version.__version__, "device": "cpu",
-            "registered_nodes": sorted(expected_nodes), "executed_nodes": ["Gen2_InputPanel", "Gen2_Checkerboard", "Gen2_StringReplace", "Gen2_OutputPanel"],
+            "registered_nodes": sorted(expected_nodes), "executed_nodes": [
+                "Gen2_InputPanel", "Gen2_Checkerboard", "Gen2_StringReplace", "Gen2_OutputPanel", "Gen2_LoRASave",
+                "Gen2_LoRALoad",
+            ],
             "rejected_invalid_inputs": rejected, "image_cache_invalidation": True,
             "history_contract_roundtrip": True, "hardware_model_sampling_tested": False,
         }
@@ -186,6 +279,7 @@ class ComfyUIIntegrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     if "--worker" in sys.argv:
-        run_worker()
+        with tempfile.TemporaryDirectory(prefix="gen2-comfy-base-") as base_directory:
+            run_worker(base_directory)
     else:
         unittest.main()
