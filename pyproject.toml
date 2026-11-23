@@ -1,7 +1,7 @@
 [project]
 name = "gen2"
 description = "ComfyUI nodes for configurable API panels, image and string utilities, LanPaint integration, and an experimental Flux.2 Klein compatibility fix."
-version = "3.0.0"
+version = "3.1.0"
 license = {file = "LICENSE"} 
 # classifiers = [
 #     # For OS-independent nodes (works on all operating systems)
