@@ -16,6 +16,20 @@ Collect named results from your workflow in one place. Preview and save images, 
 
 Connect the Input Panel's **PANEL_LINK** output to this node to keep each run's parameters alongside its results. Together, the panels define the inputs and outputs for workflows you call through an API.
 
+## LoRA organization
+
+### Gen2 LoRA Save
+
+Choose a LoRA in **file**, enter its **trigger**, **model**, and **type**, then queue the node. It moves the file to `models/loras/gen2/<number>/<model>/<type>/` and preserves its filename. Numbering starts at 1 and continues after the highest existing numbered folder.
+
+The adjacent `trigger.json` contains one UTF-8 JSON string. For example, entering `my style` writes `"my style"`. Leading and trailing whitespace is trimmed. Connect **status** to a string preview to see the destination path or the reason a save failed.
+
+### Gen2 LoRA Load
+
+Connect a string containing the folder number to **number** and enter **model** and **type** exactly as saved. For example, `3`, `q21`, and `style` select `models/loras/gen2/3/q21/style/`.
+
+Connect **lora_name** (COMBO) to the core model-only LoRA loader’s **lora_name** input. Connect **trigger** (STRING) to a prompt or text preview to use the exact string stored in `trigger.json`.
+
 ## LanPaint inpainting
 
 ### Gen2 LanPaint Soft Denoise Patch
@@ -56,4 +70,4 @@ Restart ComfyUI, then search for **Gen2** in the node menu. Requires ComfyUI **v
 
 ## Upgrading from 2.x
 
-Version 3 ships the six nodes listed above. Older Qwen Image, Flux.2 Fun ControlNet, Ideogram, AITK loader, pose, and tiling nodes are no longer included. Keep a 2.x installation for workflows that still depend on them.
+Older Qwen Image, Flux.2 Fun ControlNet, Ideogram, AITK loader, pose, and tiling nodes are no longer included in version 3. Keep a 2.x installation for workflows that still depend on them.
