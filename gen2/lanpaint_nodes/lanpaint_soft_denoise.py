@@ -298,27 +298,21 @@ def _validate_image_latent(x: torch.Tensor) -> None:
         )
 
 
-def _normalize_mask_rank(mask: torch.Tensor, name: str, x: torch.Tensor) -> torch.Tensor:
+def _as_spatial_mask(mask: torch.Tensor, name: str, x: torch.Tensor) -> torch.Tensor:
     if not isinstance(mask, torch.Tensor):
         raise _runtime_error(f"Gen2 LanPaint Soft Denoise Patch expected {name} to be a tensor.")
-    if x.ndim == 5:
-        if mask.shape[-2:] != x.shape[-2:]:
-            raise _runtime_error(
-                f"Gen2 LanPaint Soft Denoise Patch expected {name} to match the single-frame latent's "
-                f"spatial size {tuple(x.shape[-2:])}, but received shape {tuple(mask.shape)}."
-            )
-        if mask.ndim == 5 and mask.shape[2] == 1:
-            return mask
+    if x.ndim == 5 and mask.ndim == 5 and mask.shape[2] == 1:
+        return mask.squeeze(2)
     if mask.ndim == 2:
-        mask = mask.unsqueeze(0).unsqueeze(0)
-    elif mask.ndim == 3:
-        mask = mask.unsqueeze(1)
-    elif mask.ndim != 4:
-        raise _runtime_error(
-            f"Gen2 LanPaint Soft Denoise Patch received incompatible {name} shape {tuple(mask.shape)} "
-            f"for latent shape {tuple(x.shape)}."
-        )
-    return mask.unsqueeze(2) if x.ndim == 5 else mask
+        return mask.unsqueeze(0).unsqueeze(0)
+    if mask.ndim == 3:
+        return mask.unsqueeze(1)
+    if mask.ndim == 4:
+        return mask
+    raise _runtime_error(
+        f"Gen2 LanPaint Soft Denoise Patch received incompatible {name} shape {tuple(mask.shape)} "
+        f"for latent shape {tuple(x.shape)}."
+    )
 
 
 def _align_mask_batch(mask: torch.Tensor, target_batch: int, name: str) -> torch.Tensor:
@@ -346,7 +340,7 @@ def _align_mask_channels(mask: torch.Tensor, target_channels: int, name: str) ->
 
 def prepare_soft_mask(source_mask: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
     _validate_image_latent(x)
-    mask = _normalize_mask_rank(source_mask, "soft mask", x)
+    mask = _as_spatial_mask(source_mask, "soft mask", x)
     if not torch.isfinite(mask).all():
         raise _runtime_error("Gen2 LanPaint Soft Denoise Patch received NaN or infinite values in the soft mask.")
     mask = mask.to(device=x.device, dtype=x.dtype)
@@ -357,20 +351,26 @@ def prepare_soft_mask(source_mask: torch.Tensor, x: torch.Tensor) -> torch.Tenso
     mask = mask.clamp(0.0, 1.0)
     if not torch.isfinite(mask).all():
         raise _runtime_error("Gen2 LanPaint Soft Denoise Patch produced invalid values while preparing the soft mask.")
-    return mask
+    return mask.unsqueeze(2) if x.ndim == 5 else mask
 
 
 def prepare_hard_envelope(denoise_mask: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
     _validate_image_latent(x)
-    mask = _normalize_mask_rank(denoise_mask, "LanPaint denoise mask", x)
+    mask = _as_spatial_mask(denoise_mask, "LanPaint denoise mask", x)
     if not torch.isfinite(mask).all():
         raise _runtime_error("Gen2 LanPaint Soft Denoise Patch received NaN or infinite values in the LanPaint denoise mask.")
     mask = mask.to(device=x.device, dtype=x.dtype)
     mask = _align_mask_batch(mask, int(x.shape[0]), "LanPaint denoise mask")
     if tuple(mask.shape[-2:]) != tuple(x.shape[-2:]):
+        if x.ndim == 5:
+            raise _runtime_error(
+                "Gen2 LanPaint Soft Denoise Patch expected LanPaint denoise mask to match the single-frame latent's "
+                f"spatial size {tuple(x.shape[-2:])}, but received shape {tuple(denoise_mask.shape)}."
+            )
         mask = F.interpolate(mask, size=x.shape[-2:], mode="nearest-exact")
     mask = _align_mask_channels(mask, int(x.shape[1]), "LanPaint denoise mask")
-    return (mask > 0.5).to(dtype=x.dtype)
+    mask = (mask > 0.5).to(dtype=x.dtype)
+    return mask.unsqueeze(2) if x.ndim == 5 else mask
 
 
 def schedule_strength(

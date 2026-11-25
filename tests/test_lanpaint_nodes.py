@@ -52,11 +52,21 @@ class MaskAndScheduleTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "single-frame"):
             LP.prepare_soft_mask(torch.ones(1, 1), torch.zeros(1, 1, 2, 1, 1))
 
-    def test_single_frame_masks_must_match_latent_spatial_size(self):
+    def test_single_frame_soft_mask_downsamples_like_4d(self):
+        x = torch.zeros(2, 3, 2, 3)
+        soft = torch.zeros(2, 16, 24)
+        soft[0, 3, 3] = 1.0
+        soft[1, 11, 19] = 0.5
+        expected = LP.prepare_soft_mask(soft, x).unsqueeze(2)
+        for mask in (soft, soft[:, None, None]):
+            with self.subTest(mask_shape=mask.shape):
+                result = LP.prepare_soft_mask(mask, x.unsqueeze(2))
+                torch.testing.assert_close(result, expected)
+
+    def test_single_frame_hard_mask_must_match_latent_spatial_size(self):
         x = torch.zeros(2, 3, 1, 2, 2)
-        for prepare in (LP.prepare_soft_mask, LP.prepare_hard_envelope):
-            with self.subTest(prepare=prepare.__name__), self.assertRaisesRegex(RuntimeError, "spatial size"):
-                prepare(torch.ones(2, 4, 4), x)
+        with self.assertRaisesRegex(RuntimeError, "spatial size"):
+            LP.prepare_hard_envelope(torch.ones(2, 4, 4), x)
 
     def test_hard_envelope_uses_strict_threshold_and_nearest_resize(self):
         source = torch.tensor([[0.5, 0.51]])
