@@ -49,8 +49,14 @@ class MaskAndScheduleTests(unittest.TestCase):
             LP.prepare_soft_mask(torch.zeros(2, 1, 1), torch.zeros(3, 1, 1, 1))
         with self.assertRaisesRegex(RuntimeError, "channels"):
             LP.prepare_soft_mask(torch.zeros(1, 2, 1, 1), torch.zeros(1, 3, 1, 1))
-        with self.assertRaisesRegex(RuntimeError, "5D video"):
-            LP.prepare_soft_mask(torch.ones(1, 1), torch.zeros(1, 1, 1, 1, 1))
+        with self.assertRaisesRegex(RuntimeError, "single-frame"):
+            LP.prepare_soft_mask(torch.ones(1, 1), torch.zeros(1, 1, 2, 1, 1))
+
+    def test_single_frame_masks_must_match_latent_spatial_size(self):
+        x = torch.zeros(2, 3, 1, 2, 2)
+        for prepare in (LP.prepare_soft_mask, LP.prepare_hard_envelope):
+            with self.subTest(prepare=prepare.__name__), self.assertRaisesRegex(RuntimeError, "spatial size"):
+                prepare(torch.ones(2, 4, 4), x)
 
     def test_hard_envelope_uses_strict_threshold_and_nearest_resize(self):
         source = torch.tensor([[0.5, 0.51]])
@@ -172,6 +178,21 @@ class ProxyTests(unittest.TestCase):
         output = proxy(x, torch.tensor([1.]), denoise_mask=torch.ones_like(x))
         torch.testing.assert_close(output, tensor([10., 10., 10.]))
         torch.testing.assert_close(x, tensor([8., 8., 8.]))
+
+    def test_single_frame_latents_blend_each_image_with_its_own_mask(self):
+        source = torch.full((2, 3, 1, 2, 2), 2.0)
+        runtime = LanPaintRuntimeDouble(source)
+        soft = torch.tensor([[[0., 0.5], [1., 1.]], [[1., 0.75], [0.25, 0.]]])
+        hard = torch.tensor([[[1., 1.], [0., 1.]], [[1., 0.], [1., 1.]]])[:, None, None]
+        x = torch.full_like(source, 8.0)
+        proxy = LP.LanPaintSoftDenoiseProxy(runtime, soft)
+        output = proxy(x, torch.tensor([1., 0.5]), denoise_mask=hard)
+
+        expected_output = torch.tensor([[[2., 6.], [2., 10.]], [[10., 2.], [4., 2.]]])
+        expected_input = torch.tensor([[[5., 6.5], [5., 8.]], [[8., 3.5], [4.625, 3.5]]])
+        torch.testing.assert_close(output, expected_output[:, None, None].expand_as(source))
+        torch.testing.assert_close(runtime.calls[0][0], expected_input[:, None, None].expand_as(source))
+        self.assertIs(runtime.calls[0][2]["denoise_mask"], hard)
 
     def test_mask_function_runs_once_on_soft_path_without_mutating_options(self):
         calls = []
